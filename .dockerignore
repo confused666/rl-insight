@@ -1,0 +1,23 @@
+# Build-context excludes for the RL-Insight image.
+#
+# The Dockerfile copies only pyproject.toml, README.md, LICENSE, rl_insight/,
+# recipe/, and docker/, so this file only keeps the context small and free of
+# host artifacts — it does not gate what the build can see.
+#
+# NOTE: .git IS excluded (unlike verl's images, which derive their version
+# with setuptools_scm): the package version is static in pyproject.toml.
+
+.git/
+
+# Python virtual environments — never copy a host venv into an image.
+**/.venv/
+**/.venvs/
+
+# Python caches, test artifacts, and tooling state.
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/.ipynb_checkpoints/

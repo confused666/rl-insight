@@ -2,21 +2,21 @@
 
 RL-Insight Monitor needs three Linux services before online monitoring can run:
 
-| Service | Role | Required version | Installer version |
-|---|---|---|---|
-| Prometheus | stores and queries training metrics | `>= 2.30.0` | `2.54.1` |
-| Tempo | stores and queries RL state traces | `>= 2.0.0` | `2.6.1` |
-| Grafana | shows dashboards and trace views | `>= 13.0.0` | `13.0.0` |
+| Service    | Role                                | Required version | Installer version |
+| ---------- | ----------------------------------- | ---------------- | ----------------- |
+| Prometheus | stores and queries training metrics | `>= 2.30.0`    | `2.54.1`        |
+| Tempo      | stores and queries RL state traces  | `>= 2.0.0`     | `2.6.1`         |
+| Grafana    | shows dashboards and trace views    | `>= 13.0.0`    | `13.0.0`        |
 
-Choose one of the three approaches below depending on your network environment.
+Choose one of the three approaches below depending on your network environment. To run the same stack in a container instead of installing services on the host, see the **Run with Docker** section below.
 
 ## Supported Linux Platforms
 
 Automatic and manual installation are Linux-only.
 
-| OS family | CPU architectures |
-|---|---|
-| Ubuntu / Debian | `amd64` / `x86_64`, `arm64` / `aarch64` |
+| OS family                    | CPU architectures                               |
+| ---------------------------- | ----------------------------------------------- |
+| Ubuntu / Debian              | `amd64` / `x86_64`, `arm64` / `aarch64` |
 | CentOS / RHEL / Rocky / Alma | `amd64` / `x86_64`, `arm64` / `aarch64` |
 
 Windows and macOS can run the training-side Python APIs, but RL-Insight does not manage local Prometheus, Tempo, or Grafana services there yet.
@@ -157,15 +157,98 @@ rl-insight server start
 
 ---
 
+## Run with Docker
+
+The project also provides an all-in-one image that bundles the CLI together with Prometheus, Tempo, and Grafana. With this approach nothing is installed on the host — no Node.js, no Grafana Labs repository, and no service binaries. Docker is the only requirement.
+
+Build the image from the repository root:
+
+```bash
+docker build -f docker/Dockerfile -t rl-insight:latest .
+```
+
+To select a different Python base image or pip index, pass `PYTHON_VERSION` / `PIP_INDEX_URL` as `--build-arg` values.
+
+Multi-architecture (amd64/arm64) images are also published to the GitHub Container Registry on every `v*` tag:
+
+```bash
+docker pull ghcr.io/verl-project/rl-insight:latest
+```
+
+Start the full stack on Linux:
+
+```bash
+docker run -d --name rl-insight --network host --stop-timeout 45 \
+    --shm-size=2g \
+    -v rl-insight-data:/home/rl-insight/.rl-insight/data \
+    rl-insight:latest
+```
+
+| Option                     | Meaning                                                                                                        |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `--network host`         | Services bind`0.0.0.0`, so ports 18080 / 9090 / 3200 / 3000 are published on the host directly (Linux only). |
+| `--stop-timeout 45`      | Allow time for graceful shutdown (Prometheus data flush) before SIGKILL.                                       |
+| `--shm-size=2g`          | Shared memory headroom; the Docker default of 64MB is too small.                                               |
+| `-v rl-insight-data:...` | Persist server data in a named volume (see**Data Persistence** below).                                   |
+
+The container runs as the non-root user `rl-insight` (uid 10001), matching the non-root deployment recommended above. No custom data path is configured: `~` simply resolves to `/home/rl-insight` for that user, so data still lives in the default `~/.rl-insight` layout described in **Data Persistence** below. The named volume mounts exactly that directory, which the image also declares as a `VOLUME`.
+
+### Port Mapping
+
+With `--network host`, service ports land on the host unchanged and cannot be remapped. On macOS/Windows, or when a host port is already taken by another process, use bridge networking and publish ports explicitly. The container port after `:` is fixed by each service; the host port before it is freely configurable:
+
+```bash
+docker run -d --name rl-insight --stop-timeout 45 --shm-size=2g \
+    -p 18080:18080 -p 9090:9090 -p 3200:3200 -p 13000:3000 \
+    -v rl-insight-data:/home/rl-insight/.rl-insight/data \
+    rl-insight:latest
+```
+
+The example above maps Grafana to host port 13000 to avoid a conflict with an existing Grafana instance; browse `http://<server-ip>:13000`.
+
+| Container port | Service           |
+| -------------- | ----------------- |
+| 18080          | rl-insight web UI |
+| 9090           | Prometheus        |
+| 3200           | Tempo             |
+| 3000           | Grafana           |
+
+### Health Check and Logs
+
+The image defines a `HEALTHCHECK` that polls all four service endpoints every 30s:
+
+```bash
+docker inspect --format '{{json .State.Health}}' rl-insight
+docker logs -f rl-insight
+```
+
+The repository also provides `tests/monitor/special_e2e/docker_smoke_test.sh`, the same four-stage container test used by CI (healthy start, graceful stop, restart, core-service failure):
+
+```bash
+tests/monitor/special_e2e/docker_smoke_test.sh rl-insight:latest
+```
+
+### Offline Image Distribution
+
+Where a registry is unavailable, distribute the image as a file:
+
+```bash
+docker save rl-insight:latest | gzip > rl-insight-latest-linux-arm64.tar.gz
+```
+
+Name the file with the architecture it was built for. On the target host, `docker load -i rl-insight-latest-linux-arm64.tar.gz` restores the original name:tag.
+
+---
+
 ## Data Persistence
 
 RL-Insight keeps server data on disk. By default, data is stored under `~/.rl-insight/data`:
 
-| Service | Persistent data |
-|---|---|
-| Prometheus | `~/.rl-insight/data/prometheus` TSDB blocks |
-| Tempo | `~/.rl-insight/data/tempo/traces` and `~/.rl-insight/data/tempo/wal` |
-| Grafana | `~/.rl-insight/data/grafana` data, logs, and plugins |
+| Service    | Persistent data                                                          |
+| ---------- | ------------------------------------------------------------------------ |
+| Prometheus | `~/.rl-insight/data/prometheus` TSDB blocks                            |
+| Tempo      | `~/.rl-insight/data/tempo/traces` and `~/.rl-insight/data/tempo/wal` |
+| Grafana    | `~/.rl-insight/data/grafana` data, logs, and plugins                   |
 
 `Ctrl+C` and `rl-insight server stop` stop processes only. They do not delete collected metrics, traces, or dashboard state.
 
