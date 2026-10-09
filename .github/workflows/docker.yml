@@ -6,10 +6,7 @@ on:
       - .dockerignore
       - docker/**
       - rl_insight/**
-      - recipe/**
       - pyproject.toml
-      - README.md
-      - LICENSE
       - tests/monitor/special_e2e/docker_smoke_test.sh
       - .github/workflows/docker.yml
   push:
