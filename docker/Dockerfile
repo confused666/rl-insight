@@ -12,11 +12,16 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
 # tini reaps orphaned service processes; ca-certificates for release downloads.
-# The container runs as a non-root user with a stable UID for volume ownership.
+# curl/wget/zip/unzip/vim/less/procps/net-tools/iputils-ping are common
+# debugging tools bundled for convenience. "ll" is a shell alias (not a
+# package), so append it to /root/.bashrc for interactive shells.
+# The container runs as root for easier in-container debugging; service
+# state and manifests therefore live under /root/.rl-insight.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tini \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates tini curl wget zip unzip vim less procps net-tools iputils-ping \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 10001 rl-insight
+    && echo "alias ll='ls -alF'" >> /root/.bashrc
 
 WORKDIR /opt/rl-insight
 
@@ -30,17 +35,15 @@ COPY recipe/ ./recipe/
 ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install .
 
-# Bundle Prometheus, Tempo, and Grafana. Run the architecture-aware installer
-# as the runtime user so manifest paths under its home stay valid; drop the
-# download cache, which is never needed at container startup.
-USER rl-insight
+# Bundle Prometheus, Tempo, and Grafana. Drop the download cache, which is
+# never needed at container startup.
 RUN rl-insight server install \
-    && rm -rf /home/rl-insight/.rl-insight/services/_downloads \
-    && mkdir -p /home/rl-insight/.rl-insight/data
+    && rm -rf /root/.rl-insight/services/_downloads \
+    && mkdir -p /root/.rl-insight/data
 
 COPY docker/entrypoint.py docker/healthcheck.py /opt/rl-insight/docker/
 
-VOLUME ["/home/rl-insight/.rl-insight/data"]
+VOLUME ["/root/.rl-insight/data"]
 
 # 18080 rl-insight API, 3000 Grafana, 9090 Prometheus, 3200 Tempo, 4318 OTLP/HTTP.
 EXPOSE 18080 3000 9090 3200 4318
