@@ -10,8 +10,9 @@ on:
         type: boolean
         default: false
 
-# Cleanup runs must not overlap each other; concurrent nightly publishes from
-# the Docker workflow are protected by `older-than` in both steps below.
+# Cleanup runs must not overlap each other. A nightly publish that races this
+# workflow is safe: its fresh version sorts newest, so it lands inside the
+# keep-10 set and is never a deletion candidate.
 concurrency:
   group: ghcr-cleanup
   cancel-in-progress: false
@@ -47,22 +48,24 @@ jobs:
 
       # Step 2 — bound the nightly history. keep-n-tagged operates only on
       # images matched by delete-tags (source: collectKeepNTaggedCandidates),
-      # so semver release tags (0.3.0, 0.3, ...) are never candidates and are
-      # kept indefinitely. The rolling `nightly` tag is excluded explicitly.
-      # Untagged leftovers (rolling-tag moves, interrupted pushes) plus
-      # ghost, partial, and orphaned images are deleted.
+      # so semver release tags are never candidates. Semver release tags
+      # (0.3.0, 0.3, ...) and the rolling `nightly` tag are additionally
+      # excluded from every delete rule — including ghost/partial/orphaned
+      # detection — so release images survive even if their platform children
+      # ever look incomplete. No `older-than` here: the nightly cap applies
+      # immediately, so the registry converges to 10 nightlies on the first
+      # run instead of waiting out an age window.
       - name: Prune nightly image versions
         uses: dataaxiom/ghcr-cleanup-action@v1
         with:
           package: rl-insight
           delete-tags: "nightly-*"
-          exclude-tags: "nightly"
+          exclude-tags: "nightly,0.*,[0-9]*"
           keep-n-tagged: 10
           delete-untagged: true
           delete-ghost-images: true
           delete-partial-images: true
           delete-orphaned-images: true
-          older-than: 7 days
           dry-run: ${{ env.DRY_RUN }}
 
       # The Docker workflow pushes one nightly-<date>-<sha> git marker tag per
@@ -90,6 +93,6 @@ jobs:
             else
               echo "Deleting ${ref}"
               gh api -X DELETE \
-                "/repos/${GITHUB_REPOSITORY}/git/refs/${ref#refs/tags/}"
+                "/repos/${GITHUB_REPOSITORY}/git/refs/${ref#refs/}"
             fi
           done
