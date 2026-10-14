@@ -200,7 +200,7 @@ docker run -d --name rl-insight --network host --stop-timeout 45 \
 | `--shm-size=2g`          | Shared memory headroom; the Docker default of 64MB is too small.                                               |
 | `-v rl-insight-data:...` | Persist server data in a named volume (see**Data Persistence** below).                                   |
 
-The container runs as `root`, which makes in-container debugging easier (e.g. `docker exec -it rl-insight bash` to inspect processes, install ad-hoc packages, or read service state). Common debugging utilities (`curl`, `wget`, `zip`, `unzip`, `vim`, `less`, `ps`/`top`, `netstat`, `ping`) are preinstalled, and the `ll` alias is enabled for interactive shells. No custom data path is configured: `~` simply resolves to `/root`, so data still lives in the default `~/.rl-insight` layout described in **Data Persistence** below. The named volume mounts exactly that directory, which the image also declares as a `VOLUME`.
+The container runs as `root` and bundles common debugging tools such as `curl` and `vim`. `~` resolves to `/root`, so data stays in the default `~/.rl-insight` layout; the named volume mounts exactly that directory (see **Data Persistence** below).
 
 ### Port Mapping
 
