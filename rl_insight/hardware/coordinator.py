@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any, Mapping
 
 from ..utils.constants import MonitorEventKind, MonitorHardware
@@ -223,6 +224,7 @@ class HardwareMonitor:
         for entry in self._entries:
             if entry.collector is None or not entry.available:
                 continue
+            started = time.perf_counter()
             try:
                 samples = entry.collector.collect()
                 for sample in samples or []:
@@ -231,6 +233,7 @@ class HardwareMonitor:
                 self._register_failure(entry)
                 continue
             entry.consecutive_failures = 0
+            self._queue_duration(entry.name, time.perf_counter() - started)
         self._flush()
 
     def _register_failure(self, entry: _CollectorEntry) -> None:
@@ -290,6 +293,21 @@ class HardwareMonitor:
                 ),
                 "value": 1.0 if entry.available else 0.0,
                 "labels": {**self._labels, "collector": entry.name},
+            }
+        )
+
+    def _queue_duration(self, name: str, seconds: float) -> None:
+        """Append one per-collector sampling duration gauge to the batch."""
+        self._batch.append(
+            {
+                "kind": MonitorEventKind.GAUGE,
+                "name": MonitorHardware.DURATION_METRIC_NAME,
+                "documentation": (
+                    "Wall-clock duration of one hardware collector sampling "
+                    "call in seconds."
+                ),
+                "value": float(seconds),
+                "labels": {**self._labels, "collector": name},
             }
         )
 

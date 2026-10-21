@@ -12,15 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Ascend NPU collector backed by the ``npu-smi`` command line tool."""
+"""Ascend NPU collector backed by targeted ``npu-smi`` subcommands."""
 
 from __future__ import annotations
 
 import logging
 import os
-import re
 import shutil
 import subprocess
+import time
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Callable
 
 from ..base import (
@@ -34,30 +36,41 @@ from ..base import (
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
 
-__all__ = ["AscendNpuCollector", "parse_npu_smi_output"]
+__all__ = [
+    "AscendNpuCollector",
+    "parse_npu_smi_mapping",
+    "parse_npu_smi_version",
+]
 
 _NPU_SMI_BINARY = "npu-smi"
-_NPU_SMI_TIMEOUT_SECONDS = 5.0
+# One targeted query is a small CLI call; keep the per-call timeout short so a
+# hung driver cannot stall the sampling thread.
+_NPU_SMI_TIMEOUT_SECONDS = 2.0
+# Overall budget for the metric queries of one round. With four calls per
+# chip this fits roughly six chips at the per-call timeout, and caps the
+# worst case on a large node instead of multiplying the timeout by the card
+# count.
+_NPU_SMI_ROUND_BUDGET_SECONDS = 5.0
 _VISIBLE_DEVICES_ENV = "ASCEND_RT_VISIBLE_DEVICES"
-
-# ``npu-smi info`` table rows are pipe-delimited column groups, e.g.
-# ``| 0       910B1 | OK | 67.8   42   0 / 0 |`` (NPU row) and
-# ``| 0       910B1 | 0000:C1:00.0 | 60   855 / 15171 |`` (chip row).
-_BUS_ID_PATTERN = re.compile(
-    r"^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\.[0-9A-Fa-f]$"
-)
-_VERSION_PATTERN = re.compile(r"npu-smi\s+([0-9][0-9.]*)")
 _MB_TO_BYTES = 1024 * 1024
 
-# Runner signature: (binary, timeout_seconds) -> stdout text, or None on failure.
-NpuSmiRunner = Callable[[str, float], "str | None"]
+# ``npu-smi info -t health`` reports one of OK, Warning, Alarm, Critical, or
+# UNKNOWN. Map it to the exporter's binary semantics (1=healthy, 0=unhealthy).
+_HEALTHY_STATES = frozenset({"OK", "HEALTHY", "1"})
+_UNHEALTHY_STATES = frozenset(
+    {"WARNING", "ALARM", "CRITICAL", "UNKNOWN", "UNHEALTHY", "0"}
+)
+
+# Runner signature: (binary, arguments, timeout_seconds) -> stdout text, or
+# None on failure.
+NpuSmiRunner = Callable[[str, Sequence[str], float], "str | None"]
 
 
-def _run_npu_smi(binary: str, timeout: float) -> str | None:
-    """Run ``npu-smi info`` once and return its stdout, or ``None`` on failure."""
+def _run_npu_smi(binary: str, args: Sequence[str], timeout: float) -> str | None:
+    """Run one ``npu-smi`` command and return its stdout, or ``None``."""
     try:
         result = subprocess.run(
-            [binary, "info"],
+            [binary, *args],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -68,18 +81,78 @@ def _run_npu_smi(binary: str, timeout: float) -> str | None:
     return result.stdout
 
 
-def _split_row(line: str) -> list[str] | None:
-    """Split one ``npu-smi`` table row into stripped column groups."""
-    stripped = line.strip()
-    if not (stripped.startswith("|") and stripped.endswith("|")):
-        return None
-    groups = [group.strip() for group in stripped[1:-1].split("|")]
-    return groups if any(groups) else None
+@dataclass(frozen=True)
+class _Chip:
+    """One compute chip from ``npu-smi info -m``."""
+
+    npu_id: str
+    chip_id: str
+    logic_id: str
+    name: str
+    # Ascend 950 uses physical chip ids and expects ``-i <npu>`` without
+    # ``-c``; older products address a chip with ``-i <npu> -c <chip>``.
+    chip_query: bool = True
 
 
-def _first_number(text: str) -> float | None:
-    """Parse the first token of ``text`` as a float, or ``None``."""
-    tokens = text.split()
+def parse_npu_smi_mapping(text: str) -> list[_Chip]:
+    """Parse ``npu-smi info -m`` into compute chips.
+
+    The command prints either ``NPU ID / Chip ID / Chip Logic ID / Chip
+    Name`` or, on Ascend 950, ``NPU ID / Chip ID / Chip Logic ID / Chip
+    Phy-ID / Chip Name``. MCU rows carry ``-`` as their logic id and are
+    skipped, as are malformed rows, so one bad line never hides the other
+    chips.
+
+    Args:
+        text: Raw ``npu-smi info -m`` stdout.
+
+    Returns:
+        Chips sorted by logical id (the id used by ``ASCEND_RT_VISIBLE_DEVICES``).
+    """
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    header_index = next(
+        (index for index, line in enumerate(lines) if "Chip Logic ID" in line),
+        None,
+    )
+    if header_index is None:
+        return []
+
+    physical_ids = "Chip Phy-ID" in lines[header_index]
+    chips: list[_Chip] = []
+    for line in lines[header_index + 1 :]:
+        parts = line.replace("|", " ").split()
+        if physical_ids:
+            if len(parts) < 4:
+                continue
+            npu_id, chip_id, logic_id = parts[0], parts[1], parts[2]
+            name = " ".join(parts[4:])
+        else:
+            if len(parts) < 3:
+                continue
+            npu_id, chip_id, logic_id = parts[0], parts[1], parts[2]
+            name = " ".join(parts[3:])
+        if not (npu_id.isdigit() and chip_id.isdigit() and logic_id.isdigit()):
+            continue
+        chips.append(
+            _Chip(
+                npu_id=npu_id,
+                chip_id=chip_id,
+                logic_id=logic_id,
+                name=name,
+                chip_query=not physical_ids,
+            )
+        )
+    return sorted(chips, key=lambda chip: int(chip.logic_id))
+
+
+def parse_npu_smi_version(text: str) -> str:
+    """Extract the version from ``npu-smi -v`` output."""
+    return text.strip().split(":")[-1].strip()
+
+
+def _number_after_colon(line: str) -> float | None:
+    """Parse the first number after the last ``:`` on one output line."""
+    tokens = line.split(":")[-1].split()
     if not tokens:
         return None
     try:
@@ -88,164 +161,60 @@ def _first_number(text: str) -> float | None:
         return None
 
 
-def _hbm_megabytes(text: str) -> tuple[float, float] | None:
-    """Parse the HBM ``used / total`` megabyte pair from one column group.
-
-    Newer ``npu-smi`` releases (e.g. 26.1.1) merge several ``x / y`` fields
-    into one chip column: ``AICore(%) Memory-Usage(MB) HBM-Usage(MB)``.
-    The HBM pair is always the last one, so the last match wins; on older
-    releases with a single pair, that pair is the HBM usage.
-    """
-    matches = re.findall(r"(\d+)\s*/\s*(\d+)", text)
-    if not matches:
-        return None
-    used, total = matches[-1]
-    return float(used), float(total)
-
-
-def parse_npu_smi_output(text: str) -> list[Sample]:
-    """Parse ``npu-smi info`` output into per-chip samples.
-
-    Rows are paired into (NPU row, chip row) per device; rows that do not
-    pair up, and fields that fail to parse, are skipped so one malformed
-    line never drops the other devices.
-
-    Args:
-        text: Raw ``npu-smi info`` stdout.
-
-    Returns:
-        Samples for every successfully parsed device (possibly empty).
-    """
-    version_match = _VERSION_PATTERN.search(text)
-    version = version_match.group(1) if version_match else ""
-
-    rows: list[tuple[str, list[str]]] = []
+def _field_number(text: str, field: str) -> float | None:
+    """Return the value of a ``field : number`` line, or ``None``."""
+    lowered = field.lower()
     for line in text.splitlines():
-        groups = _split_row(line)
-        if not groups or len(groups) < 3:
-            continue
-        head = groups[0].split()
-        if not head or not head[0].isdigit():
-            continue  # header or separator row
-        kind = "chip" if _BUS_ID_PATTERN.match(groups[1]) else "npu"
-        rows.append((kind, groups))
-
-    samples: list[Sample] = []
-    for position, (kind, groups) in enumerate(rows):
-        if kind != "npu":
-            continue
-        chip = _paired_chip(rows, position)
-        if chip is None:
-            continue
-        # The NPU number and product name live in the NPU row; the chip row
-        # carries the per-chip number, which is always 0 on single-chip
-        # devices and must not be used as the device index.
-        npu_head = groups[0].split()
-        index = npu_head[0]
-        chip_name = " ".join(npu_head[1:])
-        labels = {"device_vendor": "ascend", "device_index": index}
-
-        power = _first_number(groups[2])
-        tail = groups[2].split()
-        temperature = _first_number(tail[1]) if len(tail) >= 2 else None
-        aicore = _first_number(chip[2])
-        hbm = _hbm_megabytes(chip[2])
-
-        samples.extend(
-            present_samples(
-                [
-                    optional_sample(
-                        "rlinsight_npu_utilization_percent",
-                        aicore,
-                        labels,
-                        "Ascend NPU AICore utilization percent",
-                    ),
-                    optional_sample(
-                        "rlinsight_npu_power_watts",
-                        power,
-                        labels,
-                        "Ascend NPU power draw in watts",
-                    ),
-                    optional_sample(
-                        "rlinsight_npu_temperature_celsius",
-                        temperature,
-                        labels,
-                        "Ascend NPU temperature in celsius",
-                    ),
-                    optional_sample(
-                        "rlinsight_npu_memory_used_bytes",
-                        None if hbm is None else hbm[0] * _MB_TO_BYTES,
-                        labels,
-                        "Ascend NPU HBM used in bytes",
-                    ),
-                    optional_sample(
-                        "rlinsight_npu_memory_total_bytes",
-                        None if hbm is None else hbm[1] * _MB_TO_BYTES,
-                        labels,
-                        "Ascend NPU HBM total in bytes",
-                    ),
-                    optional_sample(
-                        "rlinsight_npu_memory_utilization_percent",
-                        None if hbm is None or not hbm[1] else hbm[0] / hbm[1] * 100.0,
-                        labels,
-                        "Ascend NPU HBM utilization percent",
-                    ),
-                ]
-            )
-        )
-
-        # Keep the label dimension fixed across devices: a device whose
-        # product name is missing must still carry the key (with an empty
-        # value), otherwise ``rlinsight_npu_info`` would register two label
-        # sets and the hub's registry would reject the batch as a duplicate
-        # time series, dropping every sample after the offending one.
-        info_labels = dict(labels)
-        info_labels["chip_name"] = chip_name
-        info_labels["npu_smi_version"] = version
-        samples.append(
-            Sample(
-                name="rlinsight_npu_info",
-                value=1.0,
-                labels=info_labels,
-                documentation="Ascend NPU identity (always 1; see labels)",
-            )
-        )
-    return samples
+        if lowered in line.lower():
+            return _number_after_colon(line)
+    return None
 
 
-def _paired_chip(rows: list[tuple[str, list[str]]], position: int) -> list[str] | None:
-    """Return the chip row immediately following the NPU row at ``position``."""
-    if position + 1 >= len(rows) or rows[position + 1][0] != "chip":
-        return None
-    return rows[position + 1][1]
+def _health_status(text: str) -> float | None:
+    """Map an ``npu-smi -t health`` status to 1 (healthy) or 0 (unhealthy)."""
+    for line in text.splitlines():
+        lowered = line.lower()
+        if "health status" in lowered or lowered.strip().startswith("health"):
+            state = line.split(":")[-1].strip().upper()
+            if state in _HEALTHY_STATES:
+                return 1.0
+            if state in _UNHEALTHY_STATES:
+                return 0.0
+    return None
 
 
-def _visible_device_indexes() -> set[str] | None:
-    """Device indexes this process is allowed to use, or ``None`` unrestricted.
+def _visible_device_ids() -> set[str] | None:
+    """Logical device ids this process may use, or ``None`` unrestricted.
 
     ``npu-smi`` reports every chip on the node regardless of the caller's
     environment, so a job pinned to a subset (``ASCEND_RT_VISIBLE_DEVICES``)
-    would otherwise publish samples for cards it cannot even reach. Honouring
-    the variable keeps the job-scoped in-process metrics limited to the cards
-    the job actually uses. An unset or empty value means no restriction.
+    would otherwise publish samples for cards it cannot reach. Non-integer
+    values cannot be mapped onto logic ids, so they leave the collector
+    unrestricted instead of dropping every chip.
     """
     raw = os.environ.get(_VISIBLE_DEVICES_ENV, "").strip()
     if not raw:
         return None
-    return {token.strip() for token in raw.split(",") if token.strip()} or None
+    tokens = [token.strip() for token in raw.split(",") if token.strip()]
+    if not tokens or not all(token.isdigit() for token in tokens):
+        return None
+    return set(tokens)
 
 
 class AscendNpuCollector(HardwareCollector):
-    """Per-chip Ascend NPU metrics through the ``npu-smi`` CLI.
+    """Per-chip Ascend NPU metrics through targeted ``npu-smi`` queries.
 
     ``npu-smi`` is a host-side management tool that may be absent inside
     training containers; ``discover`` only checks that the binary is on
-    ``PATH`` so missing tooling degrades to an unavailable status instead
-    of failing. All subprocess execution is bounded by a timeout.
+    ``PATH`` so missing tooling degrades to an unavailable status instead of
+    failing. The static chip mapping is queried once and cached, and each
+    round issues four small commands per visible chip (``usages``, ``temp``,
+    ``power``, ``health``) bounded by a shared round budget so the sampler
+    stays cheap on large nodes.
 
     Reporting is scoped to ``ASCEND_RT_VISIBLE_DEVICES`` when that variable
-    is set, so a job using a subset of the node's cards only publishes
-    samples for those cards.
+    holds integer logic ids, so a job using a subset of the node's cards only
+    publishes samples for those cards.
     """
 
     name = "npu"
@@ -258,22 +227,21 @@ class AscendNpuCollector(HardwareCollector):
         """
         Args:
             binary: ``npu-smi`` executable name or path.
-            runner: Injected subprocess runner for tests; defaults to one
-                bounded ``npu-smi info`` invocation per round.
+            runner: Injected command runner for tests; defaults to bounded
+                ``npu-smi`` invocations.
         """
         self._binary = binary
         self._runner: NpuSmiRunner = runner or _run_npu_smi
+        self._chips: list[_Chip] = []
+        self._version = ""
 
     def discover(self) -> bool:
-        """Report whether ``npu-smi`` is usable, without probing devices.
+        """Report whether ``npu-smi`` is usable, caching the chip mapping.
 
-        Only tooling availability is checked: a node whose binary exists but
-        reports no cards still counts as available, and ``collect`` then
-        yields no samples. ``rlinsight_hardware_collector_available``
-        therefore reflects whether the collector set up its tooling, not
-        whether the node has NPUs. Checking the binary only also keeps a
-        transient ``npu-smi`` failure from permanently disabling the
-        collector before the first round.
+        Only tooling availability decides the result: a node whose binary
+        exists but reports no cards still counts as available, and ``collect``
+        then yields no samples. The mapping and version are cached here, so a
+        round only pays for the dynamic metric queries.
         """
         if shutil.which(self._binary) is None:
             logger.info(
@@ -281,21 +249,146 @@ class AscendNpuCollector(HardwareCollector):
                 "metrics are unavailable on this node."
             )
             return False
+        self._load_chips()
+        output = self._runner(self._binary, ["-v"], _NPU_SMI_TIMEOUT_SECONDS)
+        if output:
+            self._version = parse_npu_smi_version(output)
         return True
 
     def collect(self) -> list[Sample]:
-        output = self._runner(self._binary, _NPU_SMI_TIMEOUT_SECONDS)
-        if output is None:
+        chips = self._chips or self._load_chips()
+        if not chips:
             return []
-        samples = parse_npu_smi_output(output)
-        visible = _visible_device_indexes()
-        if visible is None:
-            return samples
-        return [
-            sample
-            for sample in samples
-            if str(sample.labels.get("device_index", "")) in visible
-        ]
+
+        visible = _visible_device_ids()
+        deadline = time.monotonic() + _NPU_SMI_ROUND_BUDGET_SECONDS
+        samples: list[Sample] = []
+        for chip in chips:
+            if visible is not None and chip.logic_id not in visible:
+                continue
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "[rl-insight] npu-smi sampling exceeded its %.1fs round "
+                    "budget; skipping the remaining chips.",
+                    _NPU_SMI_ROUND_BUDGET_SECONDS,
+                )
+                break
+            samples.extend(self._collect_chip(chip, deadline))
+        return samples
+
+    def _load_chips(self) -> list[_Chip]:
+        """Query and cache the static chip mapping."""
+        output = self._runner(self._binary, ["info", "-m"], _NPU_SMI_TIMEOUT_SECONDS)
+        chips = parse_npu_smi_mapping(output) if output else []
+        if chips:
+            self._chips = chips
+        elif output:
+            logger.info("[rl-insight] npu-smi reported no compute chips.")
+        return chips
+
+    def _collect_chip(self, chip: _Chip, deadline: float) -> list[Sample]:
+        """Collect one chip; each failed query only omits its own metrics."""
+        labels = {"device_vendor": "ascend", "device_index": chip.logic_id}
+
+        usage = self._query("usages", chip, deadline)
+        utilization = _field_number(usage, "aicore usage rate") if usage else None
+        hbm_rate = _field_number(usage, "hbm usage rate") if usage else None
+        hbm_capacity_mb = _field_number(usage, "hbm capacity") if usage else None
+        hbm_bandwidth = (
+            _field_number(usage, "hbm bandwidth usage rate") if usage else None
+        )
+        hbm_total = None if hbm_capacity_mb is None else hbm_capacity_mb * _MB_TO_BYTES
+        hbm_used = (
+            None
+            if hbm_rate is None or hbm_total is None
+            else hbm_rate / 100.0 * hbm_total
+        )
+
+        temperature = _field_number(
+            self._query("temp", chip, deadline) or "", "temperature"
+        )
+        power = _field_number(self._query("power", chip, deadline) or "", "power")
+        health = _health_status(self._query("health", chip, deadline) or "")
+
+        samples = present_samples(
+            [
+                optional_sample(
+                    "rlinsight_npu_utilization_percent",
+                    utilization,
+                    labels,
+                    "Ascend NPU AICore utilization percent",
+                ),
+                optional_sample(
+                    "rlinsight_npu_power_watts",
+                    power,
+                    labels,
+                    "Ascend NPU power draw in watts",
+                ),
+                optional_sample(
+                    "rlinsight_npu_temperature_celsius",
+                    temperature,
+                    labels,
+                    "Ascend NPU temperature in celsius",
+                ),
+                optional_sample(
+                    "rlinsight_npu_health_status",
+                    health,
+                    labels,
+                    "Ascend NPU health (1=healthy, 0=unhealthy)",
+                ),
+                optional_sample(
+                    "rlinsight_npu_hbm_bandwidth_utilization_percent",
+                    hbm_bandwidth,
+                    labels,
+                    "Ascend NPU HBM bandwidth utilization percent",
+                ),
+                optional_sample(
+                    "rlinsight_npu_memory_used_bytes",
+                    hbm_used,
+                    labels,
+                    "Ascend NPU HBM used in bytes",
+                ),
+                optional_sample(
+                    "rlinsight_npu_memory_total_bytes",
+                    hbm_total,
+                    labels,
+                    "Ascend NPU HBM total in bytes",
+                ),
+                optional_sample(
+                    "rlinsight_npu_memory_utilization_percent",
+                    hbm_rate,
+                    labels,
+                    "Ascend NPU HBM utilization percent",
+                ),
+            ]
+        )
+
+        # Keep the label dimension fixed across chips: a chip without a
+        # product name must still carry the key (with an empty value),
+        # otherwise the hub's registry would reject the batch as a duplicate
+        # time series.
+        info_labels = dict(labels)
+        info_labels["chip_name"] = chip.name
+        info_labels["npu_smi_version"] = self._version
+        samples.append(
+            Sample(
+                name="rlinsight_npu_info",
+                value=1.0,
+                labels=info_labels,
+                documentation="Ascend NPU identity (always 1; see labels)",
+            )
+        )
+        return samples
+
+    def _query(self, info_type: str, chip: _Chip, deadline: float) -> str | None:
+        """Run one targeted query within the remaining round budget."""
+        remaining = min(_NPU_SMI_TIMEOUT_SECONDS, deadline - time.monotonic())
+        if remaining <= 0:
+            return None
+        args = ["info", "-t", info_type, "-i", chip.npu_id]
+        if chip.chip_query:
+            args.extend(["-c", chip.chip_id])
+        return self._runner(self._binary, args, remaining)
 
 
 register_collector(AscendNpuCollector.name, AscendNpuCollector)

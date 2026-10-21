@@ -33,6 +33,7 @@ from rl_insight.hardware.coordinator import HardwareMonitor
 from rl_insight.utils.constants import MonitorEventKind, MonitorHardware
 
 _STATUS_METRIC = MonitorHardware.STATUS_METRIC_NAME
+_DURATION_METRIC = MonitorHardware.DURATION_METRIC_NAME
 
 
 class BatchRecordingClient:
@@ -128,6 +129,12 @@ def test_thread_should_emit_status_and_samples_after_start() -> None:
     assert samples[0]["value"] == 7.5
     assert samples[0]["documentation"] == "Fake gauge"
     assert samples[0]["labels"] == {"project": "p", "device_index": "0"}
+
+    duration = _events_named(client, _DURATION_METRIC)
+    assert len(duration) == 1
+    assert duration[0]["labels"] == {"project": "p", "collector": "fake_working"}
+    assert duration[0]["value"] >= 0.0
+    assert duration[0]["documentation"].startswith("Wall-clock duration")
 
 
 def test_lifecycle_should_be_idempotent_at_every_step() -> None:
@@ -324,7 +331,10 @@ def test_one_round_should_be_submitted_as_a_single_batch() -> None:
 
     assert len(client.batches) == 2
     assert [event["name"] for event in client.batches[0]] == [_STATUS_METRIC]
-    assert [event["name"] for event in client.batches[1]] == ["rlinsight_fake_gauge"]
+    assert [event["name"] for event in client.batches[1]] == [
+        "rlinsight_fake_gauge",
+        _DURATION_METRIC,
+    ]
 
 
 def test_failed_batches_should_be_dropped_and_counted(
@@ -340,6 +350,6 @@ def test_failed_batches_should_be_dropped_and_counted(
         monitor._collect_once()  # sample batch fails -> dropped
     monitor.stop()
 
-    assert monitor.dropped_events == 2
+    assert monitor.dropped_events == 3
     assert any("failed to forward" in record.message for record in caplog.records)
     assert any("dropping them" in record.message for record in caplog.records)

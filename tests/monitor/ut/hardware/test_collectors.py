@@ -690,9 +690,9 @@ def test_memory_collector_should_report_cgroup_fields_when_available(
 def test_memory_collector_should_report_total_minus_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # psutil's ``used`` (total - free - buffers - cached) drifts from both
-    # psutil's own ``percent`` and the node-exporter fallback
-    # (MemTotal - MemAvailable), so the collector reports total - available.
+    # psutil's ``used`` (total - free - buffers - cached) does not match
+    # psutil's own ``percent`` ((total - available) / total), so the collector
+    # reports total - available.
     class _VirtualMemory:
         total = 1000
         available = 400
@@ -750,8 +750,7 @@ def test_non_loopback_totals_should_skip_the_loopback_interface(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Loopback traffic mirrors in-host IPC rather than the job's real network
-    # load and is excluded by the node-exporter fallback too, so both sources
-    # stay comparable.
+    # load, so it is excluded from the summed throughput.
     counters = {
         "lo": _NetCounters(1000, 2000),
         "eth0": _NetCounters(100, 200),

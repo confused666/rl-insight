@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 from omegaconf import OmegaConf
 
 from rl_insight.server import runtime as runtime_module
@@ -37,9 +36,7 @@ def _conf(builtin: Path, data_dir: Path, extra: Path | None = None):
     grafana = {"dashboards_dir": str(builtin)}
     if extra is not None:
         grafana["extra_dashboard_dir"] = str(extra)
-    return OmegaConf.create(
-        {"grafana": grafana, "server": {"data_dir": str(data_dir)}}
-    )
+    return OmegaConf.create({"grafana": grafana, "server": {"data_dir": str(data_dir)}})
 
 
 def test_stage_copies_builtin_and_extra_without_parsing_json(tmp_path) -> None:
@@ -122,259 +119,11 @@ def test_stage_rejects_invalid_extra_directory(
 
 
 # ---------------------------------------------------------------------------
-# Hardware source selection.
-# ---------------------------------------------------------------------------
-
-
-def _hardware_dashboard() -> dict[str, Any]:
-    """A minimal dashboard with one dual-source hardware panel."""
-    return {
-        "spec": {
-            "elements": {
-                "panel-325": {
-                    "spec": {
-                        "data": {
-                            "spec": {
-                                "queries": [
-                                    {
-                                        "spec": {
-                                            "refId": "A",
-                                            "hidden": False,
-                                            "query": {
-                                                "spec": {
-                                                    "expr": (
-                                                        "rl_insight_monitor_"
-                                                        "rlinsight_cpu_utilization"
-                                                        '_percent{project=~"$project"}'
-                                                    )
-                                                }
-                                            },
-                                        }
-                                    },
-                                    {
-                                        "spec": {
-                                            "refId": "B",
-                                            "hidden": True,
-                                            "query": {
-                                                "spec": {
-                                                    "expr": (
-                                                        "100 - avg by (node) (rate("
-                                                        "node_cpu_seconds_total"
-                                                        '{job="node-exporter"}[5m]))'
-                                                    )
-                                                }
-                                            },
-                                        }
-                                    },
-                                ]
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-
-def _hidden_by_ref(dashboard: dict[str, Any], panel_id: str) -> dict[str, bool]:
-    queries = runtime_module._panel_queries(
-        dashboard["spec"]["elements"][f"panel-{panel_id}"]["spec"]
-    )
-    return {
-        query["spec"]["refId"]: bool(query["spec"].get("hidden")) for query in queries
-    }
-
-
-def test_set_hardware_source_should_toggle_dual_source_panel() -> None:
-    dashboard = _hardware_dashboard()
-    assert runtime_module._set_hardware_source(dashboard, {"node-exporter"}) is True
-    assert _hidden_by_ref(dashboard, "325") == {"A": True, "B": False}
-    assert runtime_module._set_hardware_source(dashboard, set()) is True
-    assert _hidden_by_ref(dashboard, "325") == {"A": False, "B": True}
-
-
-def test_set_hardware_source_should_ignore_single_source_panel() -> None:
-    dashboard = {
-        "spec": {
-            "elements": {
-                "panel-334": {
-                    "spec": {
-                        "data": {
-                            "spec": {
-                                "queries": [
-                                    {
-                                        "spec": {
-                                            "refId": "A",
-                                            "hidden": False,
-                                            "query": {
-                                                "spec": {
-                                                    "expr": (
-                                                        "npu_chip_info_health_status"
-                                                        '{job="npu-exporter"}'
-                                                    )
-                                                }
-                                            },
-                                        }
-                                    }
-                                ]
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    assert runtime_module._set_hardware_source(dashboard, set()) is False
-    assert _hidden_by_ref(dashboard, "334") == {"A": False}
-
-
-def test_hardware_source_should_default_to_in_process_without_targets(tmp_path) -> None:
-    conf = OmegaConf.create({"server": {"data_dir": str(tmp_path)}})
-    assert runtime_module._registered_hardware_exporters(conf) == set()
-
-
-def test_hardware_source_should_switch_to_exporter_when_target_registered(
-    tmp_path,
-) -> None:
-    targets = tmp_path / "targets" / "prometheus-targets.yml"
-    targets.parent.mkdir(parents=True)
-    targets.write_text(
-        yaml.safe_dump(
-            [
-                {
-                    "targets": ["10.0.0.1:9100"],
-                    "labels": {"rl_insight_job": "node-exporter"},
-                }
-            ]
-        ),
-        encoding="utf-8",
-    )
-    conf = OmegaConf.create({"server": {"data_dir": str(tmp_path)}})
-    assert runtime_module._registered_hardware_exporters(conf) == {"node-exporter"}
-
-
-def test_hardware_source_should_ignore_non_hardware_jobs(tmp_path) -> None:
-    targets = tmp_path / "targets" / "prometheus-targets.yml"
-    targets.parent.mkdir(parents=True)
-    targets.write_text(
-        yaml.safe_dump(
-            [{"targets": ["10.0.0.1:9000"], "labels": {"rl_insight_job": "trainer"}}]
-        ),
-        encoding="utf-8",
-    )
-    conf = OmegaConf.create({"server": {"data_dir": str(tmp_path)}})
-    assert runtime_module._registered_hardware_exporters(conf) == set()
-
-
-def _dual_source_panel(in_process: str, exporter: str) -> dict[str, Any]:
-    """One hardware panel with an in-process and an exporter query."""
-    return {
-        "spec": {
-            "data": {
-                "spec": {
-                    "queries": [
-                        {
-                            "spec": {
-                                "refId": "A",
-                                "hidden": False,
-                                "query": {"spec": {"expr": in_process}},
-                            }
-                        },
-                        {
-                            "spec": {
-                                "refId": "B",
-                                "hidden": True,
-                                "query": {"spec": {"expr": exporter}},
-                            }
-                        },
-                    ]
-                }
-            }
-        }
-    }
-
-
-def test_set_hardware_source_should_switch_each_metric_family_independently() -> None:
-    dashboard = {
-        "spec": {
-            "elements": {
-                "panel-node": _dual_source_panel(
-                    "rl_insight_monitor_rlinsight_cpu_utilization_percent",
-                    'node_cpu_seconds_total{job="node-exporter"}',
-                ),
-                "panel-npu": _dual_source_panel(
-                    "rl_insight_monitor_rlinsight_npu_utilization_percent",
-                    'npu_chip_info_utilization{job="npu-exporter"}',
-                ),
-                "panel-gpu": _dual_source_panel(
-                    "rl_insight_monitor_rlinsight_gpu_utilization_percent",
-                    "DCGM_FI_DEV_GPU_UTIL",
-                ),
-            }
-        }
-    }
-
-    # Only the NPU exporter is registered: CPU and GPU must stay in-process.
-    assert runtime_module._set_hardware_source(dashboard, {"npu-exporter"}) is True
-    assert _hidden_by_ref(dashboard, "node") == {"A": False, "B": True}
-    assert _hidden_by_ref(dashboard, "npu") == {"A": True, "B": False}
-    assert _hidden_by_ref(dashboard, "gpu") == {"A": False, "B": True}
-
-    # A different set flips only the families those exporters serve.
-    assert (
-        runtime_module._set_hardware_source(dashboard, {"node-exporter", "dcgm"})
-        is True
-    )
-    assert _hidden_by_ref(dashboard, "node") == {"A": True, "B": False}
-    assert _hidden_by_ref(dashboard, "npu") == {"A": False, "B": True}
-    assert _hidden_by_ref(dashboard, "gpu") == {"A": True, "B": False}
-
-
-def test_apply_hardware_source_should_rewrite_then_idle(tmp_path) -> None:
-    dashboard_dir = tmp_path / "dashboards"
-    dashboard_dir.mkdir()
-    (dashboard_dir / "board.json").write_text(
-        json.dumps(_hardware_dashboard()), encoding="utf-8"
-    )
-    (dashboard_dir / "notes.txt").write_text("keep", encoding="utf-8")
-
-    assert runtime_module._apply_hardware_source(dashboard_dir, {"node-exporter"}) == 1
-    stored = json.loads((dashboard_dir / "board.json").read_text(encoding="utf-8"))
-    assert _hidden_by_ref(stored, "325") == {"A": True, "B": False}
-    # Nothing left to change on a second pass, and non-JSON files are ignored.
-    assert runtime_module._apply_hardware_source(dashboard_dir, {"node-exporter"}) == 0
-    assert (dashboard_dir / "notes.txt").read_text(encoding="utf-8") == "keep"
-
-
-def test_refresh_staged_dashboards_should_target_runtime_dir(tmp_path) -> None:
-    dashboard_dir = tmp_path / "runtime" / "dashboards"
-    dashboard_dir.mkdir(parents=True)
-    # Stage a dashboard currently showing the exporter series so the default
-    # in-process selection has something to flip.
-    dashboard = _hardware_dashboard()
-    runtime_module._set_hardware_source(dashboard, {"node-exporter"})
-    (dashboard_dir / "board.json").write_text(json.dumps(dashboard), encoding="utf-8")
-    conf = OmegaConf.create(
-        {
-            "server": {
-                "data_dir": str(tmp_path / "data"),
-                "runtime_dir": str(tmp_path / "runtime"),
-            }
-        }
-    )
-    assert runtime_module.refresh_staged_dashboards(conf) == 1
-    stored = json.loads((dashboard_dir / "board.json").read_text(encoding="utf-8"))
-    assert _hidden_by_ref(stored, "325") == {"A": False, "B": True}
-
-
-# ---------------------------------------------------------------------------
 # Trainer dashboard hardware panels.
 #
-# Each hardware panel carries two queries per series: the in-process metric
-# emitted by ``rl_insight.init()`` (visible) and the node/npu/dcgm exporter
-# query (hidden). The rl-insight server keeps exactly one visible based on
-# whether an exporter target was registered, so the panels never combine the
-# two sources with PromQL ``or``.
+# Every hardware panel reads the in-process metrics emitted by
+# ``rl_insight.init()``; the legacy exporter queries were removed so the
+# built-in collector is the only hardware source.
 # ---------------------------------------------------------------------------
 
 _DASHBOARDS_DIR = (
@@ -403,16 +152,16 @@ _INTEGRATED_PANELS = {
     "331": "npu_memory_used_bytes",
     "332": "npu_power_watts",
     "333": "npu_temperature_celsius",
+    "334": "npu_health_status",
+    "335": "npu_hbm_bandwidth_utilization_percent",
     "337": "gpu_utilization_percent",
     "338": "gpu_memory_utilization_percent",
     "339": "gpu_memory_used_bytes",
     "340": "gpu_power_watts",
     "341": "gpu_temperature_celsius",
 }
-# Panels without an in-process equivalent; the exporter queries stay as-is.
-_EXPORTER_ONLY_PANELS = ("334", "335", "336")
 # In-process device panels: panel ids with NPU legend vs GPU legend.
-_NPU_DEVICE_PANELS = ("329", "330", "331", "332", "333")
+_NPU_DEVICE_PANELS = ("329", "330", "331", "332", "333", "334", "335")
 _GPU_DEVICE_PANELS = ("337", "338", "339", "340", "341")
 # Node-level host panels that must say so, since their values cover every
 # process on the node rather than just this training job.
@@ -447,27 +196,17 @@ def _device_filter_selects(expr: str) -> bool:
     )
 
 
-# Node scoping behind the node tabs: in-process series match the selected node
-# directly, while exporter series only know the scrape instance and match the
-# node as an instance host, tolerating the bracketed IPv6 form.
+# Node scoping behind the node tabs: every panel matches the selected node
+# through the in-process ``node`` label.
 _NODE_FILTER = 'node=~"$node"'
-_INSTANCE_NODE_FILTER = 'instance=~"\\\\[?$node\\\\]?(?::.*)?"'
-# Exporter series synthesize the node from the scrape instance. The regex
-# strips ``[``/``]`` off an IPv6 instance (``[2001:db8::1]:8082``) so the
-# synthesized value equals the unbracketed address the in-process node label
-# carries; ``host:port`` and IPv4 instances keep working unchanged.
-_NODE_FROM_INSTANCE_RE_SOURCE = "^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$"
-_NODE_FROM_INSTANCE = f'"node", "$1$2", "instance", "{_NODE_FROM_INSTANCE_RE_SOURCE}"'
-# Panel ids scoped by the selected node. Both the NPU and the NVIDIA/DCGM
-# device rows follow the node picker, so the exporter queries carry the same
-# instance-prefix filter as the in-process ones.
+# Panel ids scoped by the selected node. Both the NPU and the NVIDIA GPU
+# device rows follow the node picker.
 _NODE_SCOPED_PANELS = (
     "325",
     "326",
     "328",
     *_NPU_DEVICE_PANELS,
     *_GPU_DEVICE_PANELS,
-    *_EXPORTER_ONLY_PANELS,
     "344",
     *_RAY_PROCESS_PANELS,
     *_SELF_PROCESS_PANELS,
@@ -513,21 +252,20 @@ def _hidden(spec: dict[str, Any], panel_id: str) -> list[str]:
     return [expr for expr, _, hidden in _panel_queries(spec, panel_id) if hidden]
 
 
-def test_integrated_panels_should_show_in_process_and_hide_exporter(
+def test_integrated_panels_should_show_in_process_queries(
     trainer_dashboard: dict[str, Any],
 ) -> None:
     for panel_id, family in _INTEGRATED_PANELS.items():
         visible = _visible(trainer_dashboard, panel_id)
-        hidden = _hidden(trainer_dashboard, panel_id)
         assert visible, panel_id
-        assert hidden, panel_id
+        assert _hidden(trainer_dashboard, panel_id) == [], panel_id
         for expr in visible:
             assert _METRIC_PREFIX in expr, expr
             assert 'project=~"$project"' in expr, expr
             assert 'experiment_name=~"$experiment_name"' in expr, expr
         assert any(f"{_METRIC_PREFIX}{family}" in expr for expr in visible), panel_id
 
-    # The network panel reports receive and transmit as separate pairs.
+    # The network panel reports receive and transmit as separate queries.
     network_visible = _visible(trainer_dashboard, "328")
     assert any("network_receive_bytes_per_second" in expr for expr in network_visible)
     assert any("network_transmit_bytes_per_second" in expr for expr in network_visible)
@@ -536,22 +274,17 @@ def test_integrated_panels_should_show_in_process_and_hide_exporter(
 @pytest.mark.parametrize(
     "dashboard_path", _TRAINER_DASHBOARDS, ids=lambda path: path.parent.name
 )
-def test_disk_panel_should_show_in_process_and_hide_exporter(
-    dashboard_path: Path,
-) -> None:
+def test_disk_panel_should_show_in_process_queries(dashboard_path: Path) -> None:
     with open(dashboard_path, encoding="utf-8") as f:
         spec = json.load(f)["spec"]
 
     visible = _visible(spec, "344")
-    hidden = _hidden(spec, "344")
-    assert visible and hidden
+    assert visible
+    assert _hidden(spec, "344") == []
     for expr in visible:
         assert _METRIC_PREFIX in expr, expr
         assert 'project=~"$project"' in expr, expr
         assert 'experiment_name=~"$experiment_name"' in expr, expr
-    for expr in hidden:
-        assert expr.startswith("sum by (node, instance)"), expr
-        assert "node_disk_" in expr, expr
 
     assert any("disk_read_bytes_per_second" in expr for expr in visible)
     assert any("disk_write_bytes_per_second" in expr for expr in visible)
@@ -560,38 +293,32 @@ def test_disk_panel_should_show_in_process_and_hide_exporter(
 def test_npu_panels_should_keep_id_legend(
     trainer_dashboard: dict[str, Any],
 ) -> None:
-    # The in-process device_index is renamed to id; the exporter legend stays
-    # valid because node prefixes it so multi-node series never collide.
+    # The in-process device_index is renamed to id, and node prefixes the
+    # legend so multi-node series never collide.
     for panel_id in _NPU_DEVICE_PANELS:
         for expr, legend, hidden in _panel_queries(trainer_dashboard, panel_id):
+            assert not hidden, expr
             assert "label_replace(" in expr, expr
             assert legend == "{{node}} NPU {{id}}", legend
-            if hidden:
-                assert "npu_chip_info_" in expr, expr
-            else:
-                assert '"device_index"' in expr, expr
+            assert '"device_index"' in expr, expr
 
 
-def test_gpu_panels_should_keep_id_legend_with_dcgm_hidden_query(
+def test_gpu_panels_should_keep_id_legend(
     trainer_dashboard: dict[str, Any],
 ) -> None:
-    # The in-process series rewrite device_index to id; the hidden DCGM
-    # series use the gpu label and synthesize node from the instance address.
+    # The in-process series rewrite device_index to id and carry node directly.
     for panel_id in _GPU_DEVICE_PANELS:
         for expr, legend, hidden in _panel_queries(trainer_dashboard, panel_id):
+            assert not hidden, expr
             assert "label_replace(" in expr, expr
             assert legend == "{{node}} GPU {{id}}", legend
-            if hidden:
-                assert '"gpu"' in expr, expr
-            else:
-                assert '"device_index"' in expr, expr
+            assert '"device_index"' in expr, expr
 
 
 def test_memory_used_panels_should_scale_in_process_bytes_to_megabytes(
     trainer_dashboard: dict[str, Any],
 ) -> None:
-    # The in-process series are bytes; the hidden exporter series are already
-    # megabytes.
+    # The in-process series are bytes; the panels convert them to megabytes.
     for panel_id in ("331", "339"):
         visible = _visible(trainer_dashboard, panel_id)
         assert visible
@@ -599,55 +326,11 @@ def test_memory_used_panels_should_scale_in_process_bytes_to_megabytes(
             assert "/ 1048576" in expr, expr
 
 
-def test_exporter_only_panels_should_keep_exporter_queries(
+def test_node_variable_should_read_the_in_process_node_label(
     trainer_dashboard: dict[str, Any],
 ) -> None:
-    for panel_id in _EXPORTER_ONLY_PANELS:
-        for expr, _, hidden in _panel_queries(trainer_dashboard, panel_id):
-            assert not hidden, expr
-            assert "npu_chip_info_" in expr, expr
-
-
-def test_exporter_series_should_carry_the_same_node_dimension(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    # Exporter/DCGM series synthesize the node label from the instance
-    # address so multi-node legends match the in-process series in both
-    # modes.
-    for panel_id in (*_NPU_DEVICE_PANELS, *_GPU_DEVICE_PANELS, *_EXPORTER_ONLY_PANELS):
-        for expr, _, hidden in _panel_queries(trainer_dashboard, panel_id):
-            if panel_id in _EXPORTER_ONLY_PANELS or hidden:
-                assert _NODE_FROM_INSTANCE in expr, expr
-
-
-@pytest.mark.parametrize(
-    ("instance", "expected"),
-    [
-        ("10.0.0.1:9100", "10.0.0.1"),
-        # Prometheus renders an IPv6 target as ``[addr]:port``, while the
-        # in-process node label is the bare address.
-        ("[2001:db8::1]:8082", "2001:db8::1"),
-    ],
-)
-def test_node_synthesis_should_strip_the_ipv6_brackets(
-    instance: str, expected: str
-) -> None:
-    # PromQL unescapes ``\\[`` into the RE2 pattern ``\[``, so undo one level of
-    # escaping before matching with ``re``.
-    pattern = _NODE_FROM_INSTANCE_RE_SOURCE.replace("\\\\", "\\")
-    match = re.fullmatch(pattern, instance)
-
-    assert match is not None, instance
-    assert (match.group(1) or match.group(2)) == expected
-
-
-def test_node_variable_should_cover_both_sources(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    # The node tabs must keep working without an exporter (reading the
-    # in-process node label) and without in-process metrics (synthesizing a
-    # node from the exporter instance address), so both sources are combined
-    # with ``or`` rather than overwriting the in-process node label.
+    # The node picker is sourced only from the in-process series; there is no
+    # exporter instance to synthesize a node from anymore.
     spec = next(
         variable["spec"]
         for variable in trainer_dashboard["variables"]
@@ -658,11 +341,11 @@ def test_node_variable_should_cover_both_sources(
     assert "query_result(" in query
     assert "count by (node)" in query
     assert 'node=~".+"' in query
-    assert 'node!~".+"' in query
+    assert 'node!~".+"' not in query
+    assert "label_replace(" not in query
     assert f"{_METRIC_PREFIX}npu_info" in query
     assert f"{_METRIC_PREFIX}cpu_utilization_percent" in query
-    assert "npu_chip_info_name" in query
-    assert _NODE_FROM_INSTANCE in query
+    assert "npu_chip_info_name" not in query
     # Grafana anchors an undelimited pattern with ``^...$`` (``stringToJsRegex``),
     # which can never match the ``query_result`` text
     # ``{node="1.2.3.4"} 1 1712345678000``; the pattern must be slash delimited,
@@ -744,10 +427,9 @@ def test_process_panels_should_show_in_process_metrics(
     shows_card: bool,
 ) -> None:
     # The process collectors report in-process metrics only, so the panels
-    # carry a single visible query and never flip with the hardware source.
-    # They are process-level (not node-level): the legend separates the
-    # reporting processes of a shared node, and the Ray worker ones add the
-    # card so a curve can be traced past its pid.
+    # carry a single query. They are process-level (not node-level): the legend
+    # separates the reporting processes of a shared node, and the Ray worker
+    # ones add the card so a curve can be traced past its pid.
     for panel_id, family in panels.items():
         queries = _panel_queries(trainer_dashboard, panel_id)
         assert queries, panel_id
@@ -798,11 +480,6 @@ def test_device_variable_should_filter_workers_and_cards_together(
         *_GPU_DEVICE_PANELS,
         *_RAY_PROCESS_PANELS,
     ]
-    # The exporter-only NPU panels keep their own label names and are left out.
-    for panel_id in _EXPORTER_ONLY_PANELS:
-        assert all(
-            _DEVICE_FILTER not in expr for expr in _visible(trainer_dashboard, panel_id)
-        ), panel_id
 
 
 def test_only_ray_process_legends_should_sort_by_max_descending(
@@ -832,13 +509,11 @@ def test_hardware_panels_should_filter_by_selected_node(
     trainer_dashboard: dict[str, Any],
 ) -> None:
     # Every node-scoped panel separates one node's series from the rest, so a
-    # node tab shows a single node in both the in-process and exporter modes.
+    # node tab shows a single node.
     for panel_id in _NODE_SCOPED_PANELS:
         for expr, _, _ in _panel_queries(trainer_dashboard, panel_id):
-            if _METRIC_PREFIX in expr:
-                assert _node_filter_selects(expr), expr
-            else:
-                assert _INSTANCE_NODE_FILTER in expr, expr
+            assert _METRIC_PREFIX in expr, expr
+            assert _node_filter_selects(expr), expr
 
 
 def test_hardware_rows_should_not_repeat_as_node_tabs(
@@ -853,7 +528,7 @@ def test_hardware_rows_should_not_repeat_as_node_tabs(
     # spawning hundreds of tabs.
     expected_items = {
         "CPU / Host Metrics": (325, 326, 328, 344, 345, 346, 347, 348),
-        "Ascend NPU Metrics": (329, 330, 331, 332, 333, 334, 335, 336),
+        "Ascend NPU Metrics": (329, 330, 331, 332, 333, 334, 335),
     }
     for title, panel_ids in expected_items.items():
         row = _find_row_spec(trainer_dashboard["layout"], title)
@@ -877,6 +552,16 @@ def test_dashboards_should_not_reference_the_removed_instance_variable(
     # The node variable replaced the old instance-scoped one everywhere; a
     # leftover reference in a panel query would silently blank that panel.
     assert "npu_instance" not in json.dumps(trainer_dashboard)
+
+
+def test_hardware_panels_should_not_query_legacy_exporters(
+    trainer_dashboard: dict[str, Any],
+) -> None:
+    # The built-in collector is the only hardware source; a leftover exporter
+    # query would draw a second, unrelated series in the same panel.
+    text = json.dumps(trainer_dashboard)
+    for marker in ("node-exporter", "npu-exporter", "DCGM_FI_DEV_"):
+        assert marker not in text, marker
 
 
 # Descriptions are tooltips, not documentation: keep them one line long.
@@ -931,7 +616,6 @@ def test_hardware_descriptions_should_stay_short(
     panel_ids = (
         *_INTEGRATED_PANELS,
         "344",
-        *_EXPORTER_ONLY_PANELS,
         *_RAY_PROCESS_PANELS,
         *_SELF_PROCESS_PANELS,
     )

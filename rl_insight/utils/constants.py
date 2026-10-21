@@ -90,6 +90,7 @@ class MonitorHardware:
     # ``rollout``, ``ref``); empty means the label is omitted.
     WORKER_ROLE = ""
     STATUS_METRIC_NAME = "rlinsight_hardware_collector_available"
+    DURATION_METRIC_NAME = "rlinsight_hardware_collector_duration_seconds"
 
 
 class MonitorEventKind:

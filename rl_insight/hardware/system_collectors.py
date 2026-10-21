@@ -545,10 +545,8 @@ class MemoryCollector(HardwareCollector):
     def collect(self) -> list[Sample]:
         virtual = psutil.virtual_memory()
         # Report total - available rather than psutil's ``used``: the latter
-        # only subtracts free + buffers + cached, so it drifts from both
-        # psutil's own ``percent`` ((total - available) / total) and the
-        # node-exporter fallback (MemTotal - MemAvailable), making the panel
-        # step whenever the data source changed.
+        # only subtracts free + buffers + cached and does not match
+        # psutil's own ``percent`` ((total - available) / total).
         used = virtual.total - virtual.available
         return present_samples(
             [
@@ -589,9 +587,9 @@ def _non_loopback_totals() -> tuple[int, int] | None:
 
     ``psutil.net_io_counters(pernic=False)`` includes ``lo``, whose traffic
     mirrors in-host IPC (including other host-network containers) rather than
-    the job's real network load; on a single node it dominates the total. The
-    node-exporter fallback already excludes ``lo``, so dropping it here keeps
-    both sources on the same footing.
+    the job's real network load; on a single node it dominates the total.
+    Excluding ``lo`` keeps the reported throughput aligned with physical
+    interface traffic.
 
     Returns:
         The summed receive/transmit byte counters, or ``None`` when no

@@ -8276,27 +8276,6 @@
                     "refId": "A",
                     "hidden": false
                   }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "100 - avg by (node, instance) (rate(node_cpu_seconds_total{job=\"node-exporter\", mode=\"idle\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}[$__rate_interval])) * 100",
-                        "legendFormat": "{{node}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
-                  }
                 }
               ],
               "transformations": [],
@@ -8416,27 +8395,6 @@
                     },
                     "refId": "A",
                     "hidden": false
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "node_memory_MemTotal_bytes{job=\"node-exporter\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"} - node_memory_MemAvailable_bytes{job=\"node-exporter\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}",
-                        "legendFormat": "{{node}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
                   }
                 }
               ],
@@ -8567,27 +8525,6 @@
                       "version": "v0",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum by (node, instance) (rate(node_network_receive_bytes_total{job=\"node-exporter\", device!~\"lo\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}[$__rate_interval]))",
-                        "legendFormat": "{{node}} RX",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
                         "expr": "rl_insight_monitor_rlinsight_network_transmit_bytes_per_second{project=~\"$project\", experiment_name=~\"$experiment_name\", node=~\"$node\"}",
                         "legendFormat": "{{node}} TX",
                         "range": true
@@ -8598,27 +8535,6 @@
                     },
                     "refId": "C",
                     "hidden": false
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "sum by (node, instance) (rate(node_network_transmit_bytes_total{job=\"node-exporter\", device!~\"lo\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}[$__rate_interval]))",
-                        "legendFormat": "{{node}} TX",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "D",
-                    "hidden": true
                   }
                 }
               ],
@@ -8738,27 +8654,6 @@
                     },
                     "refId": "A",
                     "hidden": false
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(npu_chip_info_utilization{job=\"npu-exporter\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}, \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} NPU {{id}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
                   }
                 }
               ],
@@ -8880,27 +8775,6 @@
                     "refId": "A",
                     "hidden": false
                   }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(npu_chip_info_hbm_utilization{job=\"npu-exporter\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}, \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} NPU {{id}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
-                  }
                 }
               ],
               "transformations": [],
@@ -9021,27 +8895,6 @@
                     "refId": "A",
                     "hidden": false
                   }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(npu_chip_info_hbm_used_memory{job=\"npu-exporter\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}, \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} NPU {{id}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
-                  }
                 }
               ],
               "transformations": [],
@@ -9160,27 +9013,6 @@
                     },
                     "refId": "A",
                     "hidden": false
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(npu_chip_info_power{job=\"npu-exporter\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}, \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} NPU {{id}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
                   }
                 }
               ],
@@ -9301,27 +9133,6 @@
                     "refId": "A",
                     "hidden": false
                   }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(npu_chip_info_temperature{job=\"npu-exporter\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}, \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} NPU {{id}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
-                  }
                 }
               ],
               "transformations": [],
@@ -9410,385 +9221,6 @@
           }
         }
       },
-      "panel-334": {
-        "kind": "Panel",
-        "spec": {
-          "id": 334,
-          "title": "NPU Health Status",
-          "description": "Health status code reported by NPU Exporter",
-          "links": [],
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(npu_chip_info_health_status{job=\"npu-exporter\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}, \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} NPU {{id}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "A",
-                    "hidden": false
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "VizConfig",
-            "group": "timeseries",
-            "version": "13.0.2",
-            "spec": {
-              "options": {
-                "annotations": {
-                  "clustering": -1,
-                  "multiLane": false
-                },
-                "legend": {
-                  "calcs": [
-                    "mean",
-                    "max"
-                  ],
-                  "displayMode": "table",
-                  "placement": "bottom",
-                  "showLegend": true
-                },
-                "tooltip": {
-                  "hideZeros": false,
-                  "mode": "multi",
-                  "sort": "none"
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "unit": "short",
-                  "thresholds": {
-                    "mode": "absolute",
-                    "steps": [
-                      {
-                        "value": 0,
-                        "color": "green"
-                      }
-                    ]
-                  },
-                  "color": {
-                    "mode": "palette-classic"
-                  },
-                  "custom": {
-                    "axisBorderShow": false,
-                    "axisCenteredZero": false,
-                    "axisColorMode": "text",
-                    "axisLabel": "",
-                    "axisPlacement": "auto",
-                    "barAlignment": 0,
-                    "barWidthFactor": 0.6,
-                    "drawStyle": "line",
-                    "fillOpacity": 20,
-                    "gradientMode": "none",
-                    "hideFrom": {
-                      "legend": false,
-                      "tooltip": false,
-                      "viz": false
-                    },
-                    "insertNulls": false,
-                    "lineInterpolation": "linear",
-                    "lineWidth": 2,
-                    "pointSize": 5,
-                    "scaleDistribution": {
-                      "type": "linear"
-                    },
-                    "showPoints": "auto",
-                    "showValues": false,
-                    "spanNulls": false,
-                    "stacking": {
-                      "group": "A",
-                      "mode": "none"
-                    },
-                    "thresholdsStyle": {
-                      "mode": "off"
-                    }
-                  },
-                  "min": 0
-                },
-                "overrides": []
-              }
-            }
-          }
-        }
-      },
-      "panel-335": {
-        "kind": "Panel",
-        "spec": {
-          "id": 335,
-          "title": "NPU HBM Bandwidth Utilization",
-          "description": "HBM bandwidth utilization by NPU",
-          "links": [],
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(npu_chip_info_hbm_bandwidth_utilization{job=\"npu-exporter\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}, \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} NPU {{id}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "A",
-                    "hidden": false
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "VizConfig",
-            "group": "timeseries",
-            "version": "13.0.2",
-            "spec": {
-              "options": {
-                "annotations": {
-                  "clustering": -1,
-                  "multiLane": false
-                },
-                "legend": {
-                  "calcs": [
-                    "mean",
-                    "max"
-                  ],
-                  "displayMode": "table",
-                  "placement": "bottom",
-                  "showLegend": true
-                },
-                "tooltip": {
-                  "hideZeros": false,
-                  "mode": "multi",
-                  "sort": "none"
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "unit": "percent",
-                  "thresholds": {
-                    "mode": "absolute",
-                    "steps": [
-                      {
-                        "value": 0,
-                        "color": "green"
-                      }
-                    ]
-                  },
-                  "color": {
-                    "mode": "palette-classic"
-                  },
-                  "custom": {
-                    "axisBorderShow": false,
-                    "axisCenteredZero": false,
-                    "axisColorMode": "text",
-                    "axisLabel": "",
-                    "axisPlacement": "auto",
-                    "barAlignment": 0,
-                    "barWidthFactor": 0.6,
-                    "drawStyle": "line",
-                    "fillOpacity": 20,
-                    "gradientMode": "none",
-                    "hideFrom": {
-                      "legend": false,
-                      "tooltip": false,
-                      "viz": false
-                    },
-                    "insertNulls": false,
-                    "lineInterpolation": "linear",
-                    "lineWidth": 2,
-                    "pointSize": 5,
-                    "scaleDistribution": {
-                      "type": "linear"
-                    },
-                    "showPoints": "auto",
-                    "showValues": false,
-                    "spanNulls": false,
-                    "stacking": {
-                      "group": "A",
-                      "mode": "none"
-                    },
-                    "thresholdsStyle": {
-                      "mode": "off"
-                    }
-                  },
-                  "min": 0,
-                  "max": 100
-                },
-                "overrides": []
-              }
-            }
-          }
-        }
-      },
-      "panel-336": {
-        "kind": "Panel",
-        "spec": {
-          "id": 336,
-          "title": "NPU Network Throughput",
-          "description": "NPU network receive and transmit throughput",
-          "links": [],
-          "data": {
-            "kind": "QueryGroup",
-            "spec": {
-              "queries": [
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(npu_chip_info_bandwidth_rx{job=\"npu-exporter\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}, \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} NPU {{id}} RX",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "A",
-                    "hidden": false
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(npu_chip_info_bandwidth_tx{job=\"npu-exporter\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}, \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} NPU {{id}} TX",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": false
-                  }
-                }
-              ],
-              "transformations": [],
-              "queryOptions": {}
-            }
-          },
-          "vizConfig": {
-            "kind": "VizConfig",
-            "group": "timeseries",
-            "version": "13.0.2",
-            "spec": {
-              "options": {
-                "annotations": {
-                  "clustering": -1,
-                  "multiLane": false
-                },
-                "legend": {
-                  "calcs": [
-                    "mean",
-                    "max"
-                  ],
-                  "displayMode": "table",
-                  "placement": "bottom",
-                  "showLegend": true
-                },
-                "tooltip": {
-                  "hideZeros": false,
-                  "mode": "multi",
-                  "sort": "none"
-                }
-              },
-              "fieldConfig": {
-                "defaults": {
-                  "unit": "MBs",
-                  "thresholds": {
-                    "mode": "absolute",
-                    "steps": [
-                      {
-                        "value": 0,
-                        "color": "green"
-                      }
-                    ]
-                  },
-                  "color": {
-                    "mode": "palette-classic"
-                  },
-                  "custom": {
-                    "axisBorderShow": false,
-                    "axisCenteredZero": false,
-                    "axisColorMode": "text",
-                    "axisLabel": "",
-                    "axisPlacement": "auto",
-                    "barAlignment": 0,
-                    "barWidthFactor": 0.6,
-                    "drawStyle": "line",
-                    "fillOpacity": 20,
-                    "gradientMode": "none",
-                    "hideFrom": {
-                      "legend": false,
-                      "tooltip": false,
-                      "viz": false
-                    },
-                    "insertNulls": false,
-                    "lineInterpolation": "linear",
-                    "lineWidth": 2,
-                    "pointSize": 5,
-                    "scaleDistribution": {
-                      "type": "linear"
-                    },
-                    "showPoints": "auto",
-                    "showValues": false,
-                    "spanNulls": false,
-                    "stacking": {
-                      "group": "A",
-                      "mode": "none"
-                    },
-                    "thresholdsStyle": {
-                      "mode": "off"
-                    }
-                  },
-                  "min": 0
-                },
-                "overrides": []
-              }
-            }
-          }
-        }
-      },
       "panel-337": {
         "kind": "Panel",
         "spec": {
@@ -9819,27 +9251,6 @@
                     },
                     "refId": "A",
                     "hidden": false
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(label_replace(DCGM_FI_DEV_GPU_UTIL{instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}, \"id\", \"$1\", \"gpu\", \"(.+)\"), \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} GPU {{id}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
                   }
                 }
               ],
@@ -9961,27 +9372,6 @@
                     "refId": "A",
                     "hidden": false
                   }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(label_replace(DCGM_FI_DEV_FB_USED{instance=~\"\\\\[?$node\\\\]?(?::.*)?\"} / (DCGM_FI_DEV_FB_USED{instance=~\"\\\\[?$node\\\\]?(?::.*)?\"} + DCGM_FI_DEV_FB_FREE{instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}) * 100, \"id\", \"$1\", \"gpu\", \"(.+)\"), \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} GPU {{id}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
-                  }
                 }
               ],
               "transformations": [],
@@ -10102,27 +9492,6 @@
                     "refId": "A",
                     "hidden": false
                   }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(label_replace(DCGM_FI_DEV_FB_USED{instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}, \"id\", \"$1\", \"gpu\", \"(.+)\"), \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} GPU {{id}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
-                  }
                 }
               ],
               "transformations": [],
@@ -10242,27 +9611,6 @@
                     "refId": "A",
                     "hidden": false
                   }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(label_replace(DCGM_FI_DEV_POWER_USAGE{instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}, \"id\", \"$1\", \"gpu\", \"(.+)\"), \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} GPU {{id}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
-                  }
                 }
               ],
               "transformations": [],
@@ -10381,27 +9729,6 @@
                     },
                     "refId": "A",
                     "hidden": false
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "label_replace(label_replace(DCGM_FI_DEV_GPU_TEMP{instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}, \"id\", \"$1\", \"gpu\", \"(.+)\"), \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")",
-                        "legendFormat": "{{node}} GPU {{id}}",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
                   }
                 }
               ],
@@ -15360,27 +14687,6 @@
                       "version": "v0",
                       "spec": {
                         "editorMode": "code",
-                        "expr": "sum by (node, instance) (rate(node_disk_read_bytes_total{job=\"node-exporter\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}[$__rate_interval]))",
-                        "legendFormat": "{{node}} read",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "B",
-                    "hidden": true
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
                         "expr": "rl_insight_monitor_rlinsight_disk_write_bytes_per_second{project=~\"$project\", experiment_name=~\"$experiment_name\", node=~\"$node\"}",
                         "legendFormat": "{{node}} write",
                         "range": true
@@ -15391,27 +14697,6 @@
                     },
                     "refId": "C",
                     "hidden": false
-                  }
-                },
-                {
-                  "kind": "PanelQuery",
-                  "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "prometheus",
-                      "version": "v0",
-                      "spec": {
-                        "editorMode": "code",
-                        "expr": "sum by (node, instance) (rate(node_disk_written_bytes_total{job=\"node-exporter\", instance=~\"\\\\[?$node\\\\]?(?::.*)?\"}[$__rate_interval]))",
-                        "legendFormat": "{{node}} write",
-                        "range": true
-                      },
-                      "labels": {
-                        "grafana.app/export-label": "prometheus-1"
-                      }
-                    },
-                    "refId": "D",
-                    "hidden": true
                   }
                 }
               ],
@@ -15970,6 +15255,250 @@
                       "mode": "off"
                     }
                   }
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-334": {
+        "kind": "Panel",
+        "spec": {
+          "id": 334,
+          "title": "NPU Health Status",
+          "description": "Health reported by the built-in NPU collector: 1 healthy, 0 unhealthy.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "label_replace(rl_insight_monitor_rlinsight_npu_health_status{project=~\"$project\", experiment_name=~\"$experiment_name\", device_index=~\"$device_index\", node=~\"$node\"}, \"id\", \"$1\", \"device_index\", \"(.+)\")",
+                        "legendFormat": "{{node}} NPU {{id}}",
+                        "range": true
+                      },
+                      "labels": {
+                        "grafana.app/export-label": "prometheus-1"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.0.2",
+            "spec": {
+              "options": {
+                "annotations": {
+                  "clustering": -1,
+                  "multiLane": false
+                },
+                "legend": {
+                  "calcs": [
+                    "mean",
+                    "max"
+                  ],
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "hideZeros": false,
+                  "mode": "multi",
+                  "sort": "none"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "short",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": 0,
+                        "color": "red"
+                      },
+                      {
+                        "value": 1,
+                        "color": "green"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "palette-classic"
+                  },
+                  "custom": {
+                    "axisBorderShow": false,
+                    "axisCenteredZero": false,
+                    "axisColorMode": "text",
+                    "axisLabel": "",
+                    "axisPlacement": "auto",
+                    "barAlignment": 0,
+                    "barWidthFactor": 0.6,
+                    "drawStyle": "line",
+                    "fillOpacity": 20,
+                    "gradientMode": "none",
+                    "hideFrom": {
+                      "legend": false,
+                      "tooltip": false,
+                      "viz": false
+                    },
+                    "insertNulls": false,
+                    "lineInterpolation": "linear",
+                    "lineWidth": 2,
+                    "pointSize": 5,
+                    "scaleDistribution": {
+                      "type": "linear"
+                    },
+                    "showPoints": "auto",
+                    "showValues": false,
+                    "spanNulls": false,
+                    "stacking": {
+                      "group": "A",
+                      "mode": "none"
+                    },
+                    "thresholdsStyle": {
+                      "mode": "off"
+                    }
+                  },
+                  "min": 0,
+                  "max": 1
+                },
+                "overrides": []
+              }
+            }
+          }
+        }
+      },
+      "panel-335": {
+        "kind": "Panel",
+        "spec": {
+          "id": 335,
+          "title": "NPU HBM Bandwidth Utilization",
+          "description": "HBM bandwidth utilization by NPU.",
+          "links": [],
+          "data": {
+            "kind": "QueryGroup",
+            "spec": {
+              "queries": [
+                {
+                  "kind": "PanelQuery",
+                  "spec": {
+                    "query": {
+                      "kind": "DataQuery",
+                      "group": "prometheus",
+                      "version": "v0",
+                      "spec": {
+                        "editorMode": "code",
+                        "expr": "label_replace(rl_insight_monitor_rlinsight_npu_hbm_bandwidth_utilization_percent{project=~\"$project\", experiment_name=~\"$experiment_name\", device_index=~\"$device_index\", node=~\"$node\"}, \"id\", \"$1\", \"device_index\", \"(.+)\")",
+                        "legendFormat": "{{node}} NPU {{id}}",
+                        "range": true
+                      },
+                      "labels": {
+                        "grafana.app/export-label": "prometheus-1"
+                      }
+                    },
+                    "refId": "A",
+                    "hidden": false
+                  }
+                }
+              ],
+              "transformations": [],
+              "queryOptions": {}
+            }
+          },
+          "vizConfig": {
+            "kind": "VizConfig",
+            "group": "timeseries",
+            "version": "13.0.2",
+            "spec": {
+              "options": {
+                "annotations": {
+                  "clustering": -1,
+                  "multiLane": false
+                },
+                "legend": {
+                  "calcs": [
+                    "mean",
+                    "max"
+                  ],
+                  "displayMode": "table",
+                  "placement": "bottom",
+                  "showLegend": true
+                },
+                "tooltip": {
+                  "hideZeros": false,
+                  "mode": "multi",
+                  "sort": "none"
+                }
+              },
+              "fieldConfig": {
+                "defaults": {
+                  "unit": "percent",
+                  "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                      {
+                        "value": 0,
+                        "color": "green"
+                      }
+                    ]
+                  },
+                  "color": {
+                    "mode": "palette-classic"
+                  },
+                  "custom": {
+                    "axisBorderShow": false,
+                    "axisCenteredZero": false,
+                    "axisColorMode": "text",
+                    "axisLabel": "",
+                    "axisPlacement": "auto",
+                    "barAlignment": 0,
+                    "barWidthFactor": 0.6,
+                    "drawStyle": "line",
+                    "fillOpacity": 20,
+                    "gradientMode": "none",
+                    "hideFrom": {
+                      "legend": false,
+                      "tooltip": false,
+                      "viz": false
+                    },
+                    "insertNulls": false,
+                    "lineInterpolation": "linear",
+                    "lineWidth": 2,
+                    "pointSize": 5,
+                    "scaleDistribution": {
+                      "type": "linear"
+                    },
+                    "showPoints": "auto",
+                    "showValues": false,
+                    "spanNulls": false,
+                    "stacking": {
+                      "group": "A",
+                      "mode": "none"
+                    },
+                    "thresholdsStyle": {
+                      "mode": "off"
+                    }
+                  },
+                  "min": 0,
+                  "max": 100
                 },
                 "overrides": []
               }
@@ -18934,30 +18463,6 @@
                                     }
                                   }
                                 }
-                              },
-                              {
-                                "kind": "AutoGridLayoutItem",
-                                "spec": {
-                                  "element": {
-                                    "kind": "ElementReference",
-                                    "name": "panel-336"
-                                  },
-                                  "conditionalRendering": {
-                                    "kind": "ConditionalRenderingGroup",
-                                    "spec": {
-                                      "visibility": "hide",
-                                      "condition": "and",
-                                      "items": [
-                                        {
-                                          "kind": "ConditionalRenderingData",
-                                          "spec": {
-                                            "value": false
-                                          }
-                                        }
-                                      ]
-                                    }
-                                  }
-                                }
                               }
                             ]
                           }
@@ -19451,14 +18956,14 @@
               "name": "${datasource}"
             },
             "spec": {
-              "query": "query_result(count by (node) ({__name__=~\"rl_insight_monitor_rlinsight_cpu_utilization_percent|rl_insight_monitor_rlinsight_npu_info|rl_insight_monitor_rlinsight_gpu_info|npu_chip_info_name|DCGM_FI_DEV_GPU_UTIL\", node=~\".+\"} or label_replace({__name__=~\"rl_insight_monitor_rlinsight_cpu_utilization_percent|rl_insight_monitor_rlinsight_npu_info|rl_insight_monitor_rlinsight_gpu_info|npu_chip_info_name|DCGM_FI_DEV_GPU_UTIL\", node!~\".+\"}, \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")))",
+              "query": "query_result(count by (node) ({__name__=~\"rl_insight_monitor_rlinsight_cpu_utilization_percent|rl_insight_monitor_rlinsight_npu_info|rl_insight_monitor_rlinsight_gpu_info\", node=~\".+\"}))",
               "refId": "StandardVariableQuery"
             }
           },
           "regex": "/node=\"(?<value>[^\"]+)\"/",
           "regexApplyTo": "value",
           "sort": "alphabeticalAsc",
-          "definition": "query_result(count by (node) ({__name__=~\"rl_insight_monitor_rlinsight_cpu_utilization_percent|rl_insight_monitor_rlinsight_npu_info|rl_insight_monitor_rlinsight_gpu_info|npu_chip_info_name|DCGM_FI_DEV_GPU_UTIL\", node=~\".+\"} or label_replace({__name__=~\"rl_insight_monitor_rlinsight_cpu_utilization_percent|rl_insight_monitor_rlinsight_npu_info|rl_insight_monitor_rlinsight_gpu_info|npu_chip_info_name|DCGM_FI_DEV_GPU_UTIL\", node!~\".+\"}, \"node\", \"$1$2\", \"instance\", \"^(?:\\\\[([^\\\\]]+)\\\\]|([^:]+))(?::.*)?$\")))",
+          "definition": "query_result(count by (node) ({__name__=~\"rl_insight_monitor_rlinsight_cpu_utilization_percent|rl_insight_monitor_rlinsight_npu_info|rl_insight_monitor_rlinsight_gpu_info\", node=~\".+\"}))",
           "options": [],
           "multi": true,
           "includeAll": true,

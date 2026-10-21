@@ -17,8 +17,8 @@ tooling is faked: no NVML driver or ``npu-smi`` binary is required)."""
 
 from __future__ import annotations
 
-import re
 import sys
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
@@ -26,7 +26,8 @@ import pytest
 from rl_insight.hardware.base import COLLECTOR_REGISTRY
 from rl_insight.hardware.vendor.ascend import (
     AscendNpuCollector,
-    parse_npu_smi_output,
+    parse_npu_smi_mapping,
+    parse_npu_smi_version,
 )
 from rl_insight.hardware.vendor.nvidia import NvidiaGpuCollector
 
@@ -236,41 +237,69 @@ def test_gpu_collect_should_not_scope_on_non_integer_visible_devices(
 # Ascend npu-smi adapter.
 # ---------------------------------------------------------------------------
 
-# Captured verbatim from ``npu-smi info`` (26.1.1) on an Atlas 910B node.
-# The chip row merges AICore / DDR memory / HBM into one column group, the
-# NPU number and product name live in the NPU row, and the output ends with
-# a per-process table that must not produce samples.
-_SAMPLE_OUTPUT = """
-+------------------------------------------------------------------------------------------------------------------+
-| npu-smi 26.1.1                              Version: 26.1.1                                                      |
-+---------------------------+---------------+----------------------------------------------------------------------+
-| NPU   Name                | Health        | Power(W)             Temp(C)                 Hugepages-Usage(page)   |
-| Chip                      | Bus-Id        | AICore(%)            Memory-Usage(MB)        HBM-Usage(MB)           |
-+===========================+===============+======================================================================+
-| 0     910B3               | OK            | 97.2                 49                      0    / 0                |
-| 0                         | 0000:C1:00.0  | 0                    0    / 0                3416 / 65536            |
-+===========================+===============+======================================================================+
-| 1     910B3               | OK            | 91.4                 48                      0    / 0                |
-| 0                         | 0000:C2:00.0  | 0                    0    / 0                3412 / 65536            |
-+===========================+===============+======================================================================+
-| 2     910B3               | OK            | 86.9                 48                      0    / 0                |
-| 0                         | 0000:81:00.0  | 0                    0    / 0                3412 / 65536            |
-+===========================+===============+======================================================================+
-| 3     910B3               | OK            | 95.4                 48                      0    / 0                |
-| 0                         | 0000:82:00.0  | 0                    0    / 0                3412 / 65536            |
-+===========================+===============+======================================================================+
-+---------------------------+---------------+----------------------------------------------------------------------+
-| NPU     Chip              | Process id    | Process name       | Process memory(MB)    | Process id in container |
-+===========================+===============+======================================================================+
-| No running processes found in NPU 0                                                                              |
-+===========================+===============+======================================================================+
-| No running processes found in NPU 1                                                                              |
-+===========================+===============+======================================================================+
-| No running processes found in NPU 2                                                                              |
-+===========================+===============+======================================================================+
-| No running processes found in NPU 3                                                                              |
-+===========================+===============+======================================================================+
+_MAPPING = """
+NPU ID  Chip ID  Chip Logic ID  Chip Name
+0       0        0              910B3
+1       0        1              910B3
+2       0        2              910B3
+3       0        3              910B3
 """
+
+_PHYSICAL_MAPPING = """
+NPU ID  Chip ID  Chip Logic ID  Chip Phy-ID  Chip Name
+0       0        0              0            Ascend950
+0       1        1              1            Ascend950
+0       2        -              -            Mcu
+1       0        2              2            Ascend950
+1       1        3              3            Ascend950
+1       2        -              -            Mcu
+"""
+
+
+class FakeNpuSmi:
+    """``npu-smi`` double serving the mapping and targeted metric queries."""
+
+    def __init__(
+        self,
+        mapping: str = _MAPPING,
+        failures: set[tuple[str, str]] | None = None,
+        health_state: str = "OK",
+    ) -> None:
+        self._mapping = mapping
+        self._failures = failures or set()
+        self._health_state = health_state
+        self.calls: list[tuple[list[str], float]] = []
+
+    def __call__(self, _binary: str, args: Sequence[str], timeout: float) -> str | None:
+        arguments = list(args)
+        self.calls.append((arguments, timeout))
+        if arguments == ["-v"]:
+            return "npu-smi Version : 26.1.1"
+        if arguments == ["info", "-m"]:
+            return self._mapping
+        if len(arguments) >= 4 and arguments[:2] == ["info", "-t"]:
+            info_type = arguments[2]
+            npu_id = arguments[arguments.index("-i") + 1]
+            if (info_type, npu_id) in self._failures:
+                return None
+            if info_type == "usages":
+                return (
+                    f"NPU ID : {npu_id}\n"
+                    "Aicore Usage Rate(%) : 42\n"
+                    "HBM Usage Rate(%) : 25\n"
+                    "HBM Capacity(MB) : 65536\n"
+                    "HBM Bandwidth Usage Rate(%) : 60\n"
+                )
+            if info_type == "temp":
+                return f"NPU ID : {npu_id}\nChip ID : 0\nTemperature (C) : 49"
+            if info_type == "power":
+                return f"NPU ID : {npu_id}\nChip ID : 0\nPower (W) : 97.2"
+            if info_type == "health":
+                return (
+                    f"NPU ID : {npu_id}\nChip ID : 0\n"
+                    f"Health Status : {self._health_state}"
+                )
+        return None
 
 
 def _by_name_and_index(samples: list[Any]) -> dict[tuple[str, str], Any]:
@@ -284,81 +313,40 @@ def test_npu_collector_should_register_under_config_name() -> None:
     assert COLLECTOR_REGISTRY["npu"] is AscendNpuCollector
 
 
-def test_parse_should_report_all_fields_per_npu() -> None:
-    samples = parse_npu_smi_output(_SAMPLE_OUTPUT)
+def test_parse_mapping_should_read_compute_chips() -> None:
+    chips = parse_npu_smi_mapping(_MAPPING)
 
-    # 7 metrics x 4 NPUs; the trailing process table must add nothing.
-    assert len(samples) == 28
-    indexed = _by_name_and_index(samples)
-
-    # The NPU number (not the per-chip number) is the device index.
-    assert {index for _, index in indexed} == {"0", "1", "2", "3"}
-
-    device_0 = {name: indexed[(name, "0")] for name, index in indexed if index == "0"}
-    assert device_0["rlinsight_npu_utilization_percent"].value == 0.0
-    assert device_0["rlinsight_npu_power_watts"].value == 97.2
-    assert device_0["rlinsight_npu_temperature_celsius"].value == 49.0
-    assert device_0["rlinsight_npu_memory_used_bytes"].value == 3416 * _MB
-    assert device_0["rlinsight_npu_memory_total_bytes"].value == 65536 * _MB
-    assert device_0["rlinsight_npu_memory_utilization_percent"].value == (
-        pytest.approx(3416 / 65536 * 100)
-    )
-
-    info = device_0["rlinsight_npu_info"]
-    assert info.value == 1.0
-    assert info.labels["device_vendor"] == "ascend"
-    assert info.labels["chip_name"] == "910B3"
-    assert info.labels["npu_smi_version"] == "26.1.1"
-
-    assert indexed[("rlinsight_npu_power_watts", "1")].value == 91.4
-    assert indexed[("rlinsight_npu_power_watts", "2")].value == 86.9
-    assert indexed[("rlinsight_npu_power_watts", "3")].value == 95.4
+    assert [(chip.npu_id, chip.chip_id, chip.logic_id) for chip in chips] == [
+        ("0", "0", "0"),
+        ("1", "0", "1"),
+        ("2", "0", "2"),
+        ("3", "0", "3"),
+    ]
+    assert all(chip.name == "910B3" for chip in chips)
+    assert all(chip.chip_query for chip in chips)
 
 
-def test_parse_should_return_empty_for_empty_or_malformed_output() -> None:
-    assert parse_npu_smi_output("") == []
-    assert parse_npu_smi_output("totally unrelated text\n") == []
+def test_parse_mapping_should_skip_mcu_rows_and_omit_chip_query() -> None:
+    # Ascend 950 reports physical chip ids and expects ``-i <npu>`` without
+    # ``-c``; MCU rows carry ``-`` as their logic id and are not compute chips.
+    chips = parse_npu_smi_mapping(_PHYSICAL_MAPPING)
+
+    assert [(chip.npu_id, chip.chip_id, chip.logic_id) for chip in chips] == [
+        ("0", "0", "0"),
+        ("0", "1", "1"),
+        ("1", "0", "2"),
+        ("1", "1", "3"),
+    ]
+    assert all(not chip.chip_query for chip in chips)
 
 
-def test_parse_should_skip_devices_without_a_chip_row() -> None:
-    # NPU rows without their chip rows: cannot pair, so no samples at all.
-    output = "\n".join(
-        line for line in _SAMPLE_OUTPUT.splitlines() if "0000:" not in line
-    )
-
-    assert parse_npu_smi_output(output) == []
+def test_parse_mapping_should_return_empty_for_malformed_output() -> None:
+    assert parse_npu_smi_mapping("") == []
+    assert parse_npu_smi_mapping("totally unrelated text\n") == []
 
 
-def test_parse_should_omit_unparseable_fields_but_keep_the_device() -> None:
-    output = _SAMPLE_OUTPUT.replace("| 97.2 ", "| N/A ")
-    output = output.replace(
-        "| 0                    0    / 0                3416 / 65536",
-        "| N/A                    0    / 0                3416 / 65536",
-    )
-
-    samples = parse_npu_smi_output(output)
-    indexed = _by_name_and_index(samples)
-
-    assert ("rlinsight_npu_power_watts", "0") not in indexed
-    assert ("rlinsight_npu_utilization_percent", "0") not in indexed
-    assert ("rlinsight_npu_temperature_celsius", "0") in indexed
-    assert ("rlinsight_npu_power_watts", "1") in indexed
-
-
-def test_npu_info_should_keep_a_fixed_label_dimension() -> None:
-    # Device 1 reports no product name: both info samples must expose the same
-    # label keys (empty value for the unknown name) so the family keeps a
-    # single label dimension and the hub registry accepts every device.
-    output = re.sub(r"\| 1\s+910B3", "| 1", _SAMPLE_OUTPUT, count=1)
-
-    samples = parse_npu_smi_output(output)
-
-    info = [sample for sample in samples if sample.name == "rlinsight_npu_info"]
-    assert len(info) == 4
-    assert len({tuple(sorted(sample.labels)) for sample in info}) == 1
-    by_index = {sample.labels["device_index"]: sample for sample in info}
-    assert by_index["0"].labels["chip_name"] == "910B3"
-    assert by_index["1"].labels["chip_name"] == ""
+def test_parse_version_should_read_the_last_colon_field() -> None:
+    assert parse_npu_smi_version("npu-smi Version : 26.1.1\n") == "26.1.1"
 
 
 def test_npu_discover_should_follow_binary_availability(
@@ -367,25 +355,95 @@ def test_npu_discover_should_follow_binary_availability(
     monkeypatch.setattr(
         "rl_insight.hardware.vendor.ascend.shutil.which", lambda _name: None
     )
-    assert AscendNpuCollector().discover() is False
+    assert AscendNpuCollector(runner=FakeNpuSmi()).discover() is False
 
     monkeypatch.setattr(
         "rl_insight.hardware.vendor.ascend.shutil.which",
         lambda _name: "/usr/local/sbin/npu-smi",
     )
-    assert AscendNpuCollector().discover() is True
+    assert AscendNpuCollector(runner=FakeNpuSmi()).discover() is True
 
 
-def test_npu_collect_should_parse_runner_output(
+def test_npu_discover_should_cache_the_mapping_and_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "rl_insight.hardware.vendor.ascend.shutil.which",
+        lambda _name: "/usr/local/sbin/npu-smi",
+    )
+    runner = FakeNpuSmi()
+    collector = AscendNpuCollector(runner=runner)
+
+    assert collector.discover() is True
+    assert [args for args, _ in runner.calls] == [["info", "-m"], ["-v"]]
+
+    runner.calls.clear()
+    collector.collect()
+    assert ["info", "-m"] not in [args for args, _ in runner.calls]
+
+
+def test_npu_collect_should_use_targeted_subcommands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("ASCEND_RT_VISIBLE_DEVICES", raising=False)
-    collector = AscendNpuCollector(runner=lambda _binary, _timeout: _SAMPLE_OUTPUT)
+    monkeypatch.setattr(
+        "rl_insight.hardware.vendor.ascend.shutil.which",
+        lambda _name: "/usr/local/sbin/npu-smi",
+    )
+    runner = FakeNpuSmi()
+    collector = AscendNpuCollector(runner=runner)
+    collector.discover()
+    runner.calls.clear()
 
     samples = collector.collect()
 
-    assert len(samples) == 28
-    assert all(sample.labels["device_vendor"] == "ascend" for sample in samples)
+    assert len(samples) == 36  # 9 metrics x 4 chips
+    indexed = _by_name_and_index(samples)
+    device_0 = {name: indexed[(name, "0")] for name, index in indexed if index == "0"}
+    assert device_0["rlinsight_npu_utilization_percent"].value == 42.0
+    assert device_0["rlinsight_npu_power_watts"].value == 97.2
+    assert device_0["rlinsight_npu_temperature_celsius"].value == 49.0
+    assert device_0["rlinsight_npu_health_status"].value == 1.0
+    assert device_0["rlinsight_npu_hbm_bandwidth_utilization_percent"].value == 60.0
+    assert device_0["rlinsight_npu_memory_total_bytes"].value == 65536 * _MB
+    assert device_0["rlinsight_npu_memory_used_bytes"].value == 25 / 100 * 65536 * _MB
+    assert device_0["rlinsight_npu_memory_utilization_percent"].value == 25.0
+
+    info = device_0["rlinsight_npu_info"]
+    assert info.value == 1.0
+    assert info.labels["device_vendor"] == "ascend"
+    assert info.labels["chip_name"] == "910B3"
+    assert info.labels["npu_smi_version"] == "26.1.1"
+
+    expected_args = [
+        ["info", "-t", info_type, "-i", npu_id, "-c", "0"]
+        for npu_id in ("0", "1", "2", "3")
+        for info_type in ("usages", "temp", "power", "health")
+    ]
+    assert [args for args, _ in runner.calls] == expected_args
+    assert all(0.0 < timeout <= 2.0 for _, timeout in runner.calls)
+
+
+def test_npu_collect_should_omit_chip_flag_for_physical_ids() -> None:
+    runner = FakeNpuSmi(mapping=_PHYSICAL_MAPPING)
+
+    samples = AscendNpuCollector(runner=runner).collect()
+
+    assert len(samples) == 36  # 9 metrics x 4 compute chips
+    assert all("-c" not in args for args, _ in runner.calls)
+
+
+def test_npu_health_should_map_non_ok_states_to_unhealthy() -> None:
+    collector = AscendNpuCollector(runner=FakeNpuSmi(health_state="Warning"))
+
+    health = [
+        sample
+        for sample in collector.collect()
+        if sample.name == "rlinsight_npu_health_status"
+    ]
+
+    assert len(health) == 4
+    assert all(sample.value == 0.0 for sample in health)
 
 
 def test_npu_collect_should_scope_to_the_visible_devices(
@@ -394,24 +452,69 @@ def test_npu_collect_should_scope_to_the_visible_devices(
     # ``npu-smi`` lists every chip on the node, so a job pinned to a subset
     # must only publish samples for the cards it can actually use.
     monkeypatch.setenv("ASCEND_RT_VISIBLE_DEVICES", "2, 3")
-    collector = AscendNpuCollector(runner=lambda _binary, _timeout: _SAMPLE_OUTPUT)
+    monkeypatch.setattr(
+        "rl_insight.hardware.vendor.ascend.shutil.which",
+        lambda _name: "/usr/local/sbin/npu-smi",
+    )
+    runner = FakeNpuSmi()
+    collector = AscendNpuCollector(runner=runner)
+    collector.discover()
+    runner.calls.clear()
 
     samples = collector.collect()
 
-    assert len(samples) == 14  # 7 metrics x 2 visible NPUs
+    assert len(samples) == 18  # 9 metrics x 2 visible chips
     assert {str(sample.labels["device_index"]) for sample in samples} == {"2", "3"}
+    assert {args[args.index("-i") + 1] for args, _ in runner.calls} == {"2", "3"}
 
 
-def test_npu_collect_should_treat_an_empty_visible_list_as_unrestricted(
+def test_npu_collect_should_not_scope_on_non_integer_visible_devices(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("ASCEND_RT_VISIBLE_DEVICES", " , ")
-    collector = AscendNpuCollector(runner=lambda _binary, _timeout: _SAMPLE_OUTPUT)
+    monkeypatch.setenv("ASCEND_RT_VISIBLE_DEVICES", "0,GPU-abc")
+    collector = AscendNpuCollector(runner=FakeNpuSmi())
 
-    assert len(collector.collect()) == 28
+    assert len(collector.collect()) == 36
 
 
-def test_npu_collect_should_return_empty_when_runner_fails() -> None:
-    collector = AscendNpuCollector(runner=lambda _binary, _timeout: None)
+def test_npu_collect_should_omit_failed_fields_but_keep_the_chip() -> None:
+    runner = FakeNpuSmi(failures={("usages", "0"), ("temp", "1")})
+    collector = AscendNpuCollector(runner=runner)
+
+    samples = collector.collect()
+
+    indexed = _by_name_and_index(samples)
+    assert ("rlinsight_npu_utilization_percent", "0") not in indexed
+    assert ("rlinsight_npu_memory_used_bytes", "0") not in indexed
+    assert ("rlinsight_npu_power_watts", "0") in indexed
+    assert ("rlinsight_npu_temperature_celsius", "0") in indexed
+
+    assert ("rlinsight_npu_temperature_celsius", "1") not in indexed
+    assert ("rlinsight_npu_power_watts", "1") in indexed
+
+
+def test_npu_collect_should_return_empty_when_the_mapping_fails() -> None:
+    collector = AscendNpuCollector(runner=FakeNpuSmi(mapping=""))
 
     assert collector.collect() == []
+
+
+def test_npu_info_should_keep_a_fixed_label_dimension() -> None:
+    # Chip 1 reports no product name: both info samples must expose the same
+    # label keys (empty value for the unknown name) so the family keeps a
+    # single label dimension and the hub registry accepts every chip.
+    mapping = """
+NPU ID  Chip ID  Chip Logic ID  Chip Name
+0       0        0              910B3
+1       0        1
+"""
+    collector = AscendNpuCollector(runner=FakeNpuSmi(mapping=mapping))
+
+    samples = collector.collect()
+
+    info = [sample for sample in samples if sample.name == "rlinsight_npu_info"]
+    assert len(info) == 2
+    assert len({tuple(sorted(sample.labels)) for sample in info}) == 1
+    by_index = {sample.labels["device_index"]: sample for sample in info}
+    assert by_index["0"].labels["chip_name"] == "910B3"
+    assert by_index["1"].labels["chip_name"] == ""
