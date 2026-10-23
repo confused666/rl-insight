@@ -60,7 +60,7 @@ class _MonitorState:
         namespace: Config ``namespace`` used for metric/OTEL resource naming (not Ray actor namespace).
         process_id: String PID added to trace attributes on emit.
         labels: Process-wide labels attached to every metric and trace event.
-        hardware_monitor: In-process hardware monitor started by ``init``, or ``None``.
+        hardware_monitor: Hardware monitor started by ``init``, or ``None``.
     """
 
     enabled: bool = False
@@ -134,7 +134,7 @@ def init(
 def _start_hardware_monitor(
     conf: DictConfig, client: Any | None, labels: dict[str, Any]
 ) -> Any | None:
-    """Start in-process hardware monitoring; any failure only warns.
+    """Start hardware monitoring; any failure only warns.
 
     Hardware monitoring must never break ``init``, so unexpected errors from
     the hardware package (e.g. malformed user config values) are downgraded
@@ -151,9 +151,9 @@ def _start_hardware_monitor(
 
 
 def finish() -> None:
-    """Clear in-process monitor state so further emits are no-ops.
+    """Clear monitor state so further emits are no-ops.
 
-    Stops the in-process hardware monitor thread if one is running, and asks
+    Stops the hardware monitor thread if one is running, and asks
     the active client to release resources (stop pollers, flush sinks) when it
     supports ``close``. Does not stop the hub HTTP server or kill the detached
     Ray actor.

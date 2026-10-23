@@ -49,7 +49,6 @@ class MonitorEnv:
 
     SERVER_URL = "RL_INSIGHT_SERVER_URL"
     SERVER_BACKEND = "RL_INSIGHT_SERVER_BACKEND"
-    WORKER_ROLE = "RL_INSIGHT_WORKER_ROLE"
     HARDWARE_ENABLED = "RL_INSIGHT_HARDWARE_ENABLED"
     CONFIG_PATH = "RL_INSIGHT_CONFIG"
 
@@ -69,28 +68,22 @@ class MonitorBackend:
 
 
 class MonitorHardware:
-    """Defaults for in-process hardware monitoring."""
+    """Defaults for hardware monitoring."""
 
-    ENABLED = True
+    ENABLED = False
     INTERVAL_SECONDS = 10
     MIN_INTERVAL_SECONDS = 5
     COLLECTORS = (
+        # CPU, memory, network and disk are collected together.
         "cpu",
-        "memory",
-        "network",
-        "disk",
         "gpu",
         "npu",
         # Per-Ray-actor process sampling (skipped automatically outside a Ray
-        # job); the monitor's own process is opt-in via 'self_process'.
+        # job) and the process hosting the monitor itself.
         "ray_actor_process",
+        "self_process",
     )
-    DISK_PATH = "/"
-    # Role of the worker that reports hardware metrics (e.g. ``trainer``,
-    # ``rollout``, ``ref``); empty means the label is omitted.
-    WORKER_ROLE = ""
     STATUS_METRIC_NAME = "rlinsight_hardware_collector_available"
-    DURATION_METRIC_NAME = "rlinsight_hardware_collector_duration_seconds"
 
 
 class MonitorEventKind:

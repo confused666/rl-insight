@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Hardware collector interfaces and registry for in-process monitoring."""
+"""Hardware collector interfaces and registry for hardware monitoring."""
 
 from __future__ import annotations
 

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Vendor accelerator adapters for in-process hardware monitoring.
+"""Vendor accelerator adapters for hardware monitoring.
 
 Importing this package registers every bundled vendor collector. Adapters
 probe their vendor tooling lazily at ``discover`` time (optional library

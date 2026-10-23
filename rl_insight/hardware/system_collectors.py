@@ -19,11 +19,10 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Any, Mapping, NamedTuple
+from typing import Any, NamedTuple
 
 import psutil
 
-from ..utils.constants import MonitorHardware
 from .base import (
     HardwareCollector,
     Sample,
@@ -48,6 +47,7 @@ __all__ = [
     "NetworkCollector",
     "ProcessCollector",
     "RayProcessCollector",
+    "SystemCollector",
 ]
 
 
@@ -116,9 +116,8 @@ class ProcessCollector(HardwareCollector):
     actor. Use :class:`RayProcessCollector` for the per-worker view. Enable it
     explicitly through ``hardware.collectors=['self_process']`` when worker
     processes call ``rl_insight.init`` themselves. Samples carry the process
-    ``pid`` and, when ``hardware.worker_role`` is configured, its
-    ``worker_role``: both are process-level facts, unlike the ``node`` label
-    which describes the host.
+    ``pid``; the monitor's own process has no worker role, so the
+    ``worker_role`` label is reported as an empty string.
     """
 
     name = "self_process"
@@ -126,23 +125,19 @@ class ProcessCollector(HardwareCollector):
     def __init__(self) -> None:
         self._process = psutil.Process()
         self._process.cpu_percent(interval=None)
-        self._worker_role = ""
-
-    def configure(self, options: Mapping[str, Any]) -> None:
-        """Apply the configured role of this process (``hardware.worker_role``)."""
-        self._worker_role = str(options.get("worker_role") or "").strip()
 
     def discover(self) -> bool:
         # psutil is a hard dependency; the current process always exists.
         return True
 
     def collect(self) -> list[Sample]:
-        # Keep the label-name set fixed across processes even when the role is
-        # unset: the hub registers one gauge per metric name, so a mix of
-        # samples with and without ``worker_role`` would drop series.
+        # Keep the label-name set fixed: the hub registers one gauge per metric
+        # name, so a mix of samples with and without ``worker_role`` would drop
+        # series. The label stays present with an empty value because this
+        # collector describes the monitor's own process, which has no role.
         labels: dict[str, str] = {
             "pid": str(self._process.pid),
-            "worker_role": self._worker_role,
+            "worker_role": "",
         }
         return present_samples(
             [
@@ -545,8 +540,10 @@ class MemoryCollector(HardwareCollector):
     def collect(self) -> list[Sample]:
         virtual = psutil.virtual_memory()
         # Report total - available rather than psutil's ``used``: the latter
-        # only subtracts free + buffers + cached and does not match
-        # psutil's own ``percent`` ((total - available) / total).
+        # only subtracts free + buffers + cached, so it drifts from both
+        # psutil's own ``percent`` ((total - available) / total) and the
+        # node-exporter fallback (MemTotal - MemAvailable), making the panel
+        # step whenever the data source changed.
         used = virtual.total - virtual.available
         return present_samples(
             [
@@ -587,9 +584,9 @@ def _non_loopback_totals() -> tuple[int, int] | None:
 
     ``psutil.net_io_counters(pernic=False)`` includes ``lo``, whose traffic
     mirrors in-host IPC (including other host-network containers) rather than
-    the job's real network load; on a single node it dominates the total.
-    Excluding ``lo`` keeps the reported throughput aligned with physical
-    interface traffic.
+    the job's real network load; on a single node it dominates the total. The
+    node-exporter fallback already excludes ``lo``, so dropping it here keeps
+    both sources on the same footing.
 
     Returns:
         The summed receive/transmit byte counters, or ``None`` when no
@@ -648,26 +645,21 @@ class NetworkCollector(HardwareCollector):
 
 
 class DiskCollector(HardwareCollector):
-    """Host-wide disk throughput plus filesystem utilization of a path."""
+    """Host-wide disk throughput plus filesystem utilization of the root path."""
 
     name = "disk"
+    _PATH = "/"
 
     def __init__(self) -> None:
         self._read_rate = RateCalculator()
         self._write_rate = RateCalculator()
-        self._path = MonitorHardware.DISK_PATH
-
-    def configure(self, options: Mapping[str, Any]) -> None:
-        """Override the sampled path (``hardware.disk_path``)."""
-        path = options.get("path")
-        if path:
-            self._path = str(path)
+        self._path = self._PATH
 
     def discover(self) -> bool:
         return psutil.disk_io_counters() is not None or self._disk_usage() is not None
 
     def _disk_usage(self) -> Any | None:
-        """Return ``psutil.disk_usage`` for the configured path, or ``None``."""
+        """Return ``psutil.disk_usage`` for the root path, or ``None``."""
         try:
             return psutil.disk_usage(self._path)
         except OSError:
@@ -704,9 +696,34 @@ class DiskCollector(HardwareCollector):
         return present_samples(samples)
 
 
-register_collector(CpuCollector.name, CpuCollector)
-register_collector(MemoryCollector.name, MemoryCollector)
-register_collector(NetworkCollector.name, NetworkCollector)
-register_collector(DiskCollector.name, DiskCollector)
+class SystemCollector(HardwareCollector):
+    """Host-level CPU, memory, network and disk metrics from psutil.
+
+    The four host families are exposed through one collector name, ``cpu``, so
+    ``hardware.collectors`` has a single host entry. Sub-collectors keep their
+    own sampling code and are composed here.
+    """
+
+    name = "cpu"
+
+    def __init__(self) -> None:
+        self._collectors = (
+            CpuCollector(),
+            MemoryCollector(),
+            NetworkCollector(),
+            DiskCollector(),
+        )
+
+    def discover(self) -> bool:
+        return any(collector.discover() for collector in self._collectors)
+
+    def collect(self) -> list[Sample]:
+        samples: list[Sample] = []
+        for collector in self._collectors:
+            samples.extend(collector.collect())
+        return samples
+
+
+register_collector(SystemCollector.name, SystemCollector)
 register_collector(ProcessCollector.name, ProcessCollector)
 register_collector(RayProcessCollector.name, RayProcessCollector)

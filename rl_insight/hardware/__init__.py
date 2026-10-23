@@ -12,29 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""In-process hardware monitoring for RL-Insight.
+"""Hardware monitoring for RL-Insight.
 
 ``rl_insight.init`` starts hardware monitoring when the ``hardware`` config
 section is enabled. In a Ray job, one node-scoped
 :class:`NodeHardwareActor` runs per alive node so host samples are collected
-exactly once per node; outside Ray the monitor falls back to a thread inside
-the caller's process. Both modes resolve the configured collector names
-against ``COLLECTOR_REGISTRY``, probe each collector, and emit batched gauge
-events through the regular monitor client. Collector modules (system
-``psutil`` collectors, vendor adapters such as NVIDIA/Ascend) register
-themselves via ``register_collector`` at import time.
+exactly once per node; outside Ray the monitor runs as a thread inside the
+caller's process. Both modes resolve the configured collector names against
+``COLLECTOR_REGISTRY``, probe each collector, and emit batched gauge events
+through the regular monitor client. Collector modules (system ``psutil``
+collectors, vendor adapters such as NVIDIA/Ascend) register themselves via
+``register_collector`` at import time.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import warnings
 from typing import TYPE_CHECKING, Any, Mapping, cast
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-from ..utils.constants import MonitorEnv, MonitorHardware, MonitorRayActor
+from ..utils.constants import MonitorHardware, MonitorRayActor
 from .identity import detect_run_id_label, identity_labels
 
 if TYPE_CHECKING:
@@ -68,6 +67,15 @@ __all__ = [
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
 
+# Upper bound for the cluster-wide actor query used to discover job nodes.
+_MAX_JOB_ACTORS = 100_000
+# Minimum delay between node-set reconciliations. A larger sampling interval
+# also slows down reconciliation to keep the State API load low.
+_MIN_RECONCILE_INTERVAL_SECONDS = 10.0
+# Actors created by RL-Insight itself must not keep a node in the job node set
+# after its training actors have gone away.
+_MONITOR_ACTOR_CLASSES = frozenset({"MonitorHubActor", "NodeHardwareActor"})
+
 
 def _resolve_hardware_params(hardware_conf: Any) -> dict[str, Any]:
     """Resolve and validate the ``hardware`` config section once.
@@ -76,8 +84,8 @@ def _resolve_hardware_params(hardware_conf: Any) -> dict[str, Any]:
         hardware_conf: The ``hardware`` node of the merged monitor config.
 
     Returns:
-        Dict with ``interval_seconds``, ``collector_names``, and
-        ``collector_options`` ready for ``HardwareMonitor``.
+        Dict with ``interval_seconds`` and ``collector_names`` ready for
+        ``HardwareMonitor``.
     """
     raw_interval = OmegaConf.select(hardware_conf, "interval_seconds")
     interval = (
@@ -98,19 +106,9 @@ def _resolve_hardware_params(hardware_conf: Any) -> dict[str, Any]:
     raw_collectors = OmegaConf.select(hardware_conf, "collectors")
     collector_names = _resolve_collector_names(raw_collectors)
 
-    raw_disk_path = OmegaConf.select(hardware_conf, "disk_path")
-    disk_path = str(raw_disk_path) if raw_disk_path else str(MonitorHardware.DISK_PATH)
-    collector_options = {"disk": {"path": disk_path}}
-    # The role describes the process that reports, not the node: on a shared
-    # node several workers report at once, so it belongs on the self-process
-    # collector instead of the monitor's base labels.
-    worker_role = _resolve_worker_role(hardware_conf)
-    if worker_role:
-        collector_options["self_process"] = {"worker_role": worker_role}
     return {
         "interval_seconds": interval,
         "collector_names": collector_names,
-        "collector_options": collector_options,
     }
 
 
@@ -148,21 +146,6 @@ def _resolve_collector_names(raw: Any) -> list[str] | None:
     return None
 
 
-def _resolve_worker_role(hardware_conf: Any) -> str:
-    """Resolve the ``worker_role`` label of the reporting process.
-
-    The environment variable wins so a launcher can tag each worker process
-    without rebuilding the config; otherwise ``hardware.worker_role`` is used.
-    An empty value means the label is omitted. This is a process-level fact,
-    so it is handed to the process collectors rather than broadcast to every
-    sample through the monitor's base labels.
-    """
-    env_role = os.environ.get(MonitorEnv.WORKER_ROLE, "").strip()
-    if env_role:
-        return env_role
-    return str(OmegaConf.select(hardware_conf, "worker_role") or "").strip()
-
-
 def _ray_is_initialized() -> bool:
     """Whether a Ray cluster is available for node-scoped actors."""
     try:
@@ -173,11 +156,63 @@ def _ray_is_initialized() -> bool:
         return False
 
 
-def _alive_node_ids() -> list[str]:
-    """Node ids of the alive nodes in the current Ray cluster."""
-    import ray
+def _local_node_id() -> str | None:
+    """Node id of the current Ray process, or ``None`` outside Ray."""
+    try:
+        import ray
 
-    return [str(node["NodeID"]) for node in ray.nodes() if node.get("Alive")]
+        return str(ray.get_runtime_context().get_node_id() or "") or None
+    except Exception:
+        return None
+
+
+def _job_node_ids() -> list[str] | None:
+    """Node ids currently used by the current Ray job.
+
+    Only the driver node and nodes hosting alive actors of the current job are
+    returned. ``ray.nodes()`` is intentionally not used here: it lists every
+    node in the cluster, including nodes used by other jobs.
+
+    Returns:
+        The job node ids, or ``None`` when the Ray state API is unavailable.
+        ``None`` means "do not reconcile/remove nodes this round".
+    """
+    try:
+        import ray
+
+        context = ray.get_runtime_context()
+        job_id = context.get_job_id()
+        job_id = job_id if isinstance(job_id, str) else job_id.hex()
+        local_node = str(context.get_node_id() or "")
+    except Exception:
+        return None
+    if not job_id:
+        return None
+
+    try:
+        from ray.util.state import list_actors
+
+        states = list_actors(
+            filters=[("job_id", "=", job_id), ("state", "=", "ALIVE")],
+            limit=_MAX_JOB_ACTORS,
+        )
+    except Exception:
+        logger.warning(
+            "[rl-insight] failed to query Ray actors for hardware node "
+            "discovery; keeping the current node set.",
+            exc_info=True,
+        )
+        return None
+
+    node_ids = {local_node} if local_node else set()
+    for state in states:
+        class_name = str(getattr(state, "class_name", "") or "").rsplit(".", 1)[-1]
+        if class_name in _MONITOR_ACTOR_CLASSES:
+            continue
+        node_id = getattr(state, "node_id", None)
+        if node_id:
+            node_ids.add(str(node_id))
+    return sorted(node_ids)
 
 
 def _node_actor_name(node_id: str) -> str:
@@ -214,6 +249,16 @@ def _create_node_actor(
     options = {
         "name": name,
         "namespace": MonitorRayActor.NAMESPACE,
+        # A per-process handle would otherwise be the actor's only lifeline:
+        # short-lived workers call ``init``/``finish`` and Ray would destroy
+        # the actor mid-job as soon as the last handle is gone. Detached
+        # actors keep sampling for the whole job and stop themselves when the
+        # job ends (see ``NodeHardwareActor._job_watchdog``).
+        "lifetime": "detached",
+        # The monitor must be schedulable on a node whose CPUs are fully used
+        # by training workers, and it must not take a CPU away from them.
+        "num_cpus": 0,
+        "max_restarts": 3,
         "scheduling_strategy": NodeAffinitySchedulingStrategy(
             node_id=node_id, soft=False
         ),
@@ -236,15 +281,15 @@ def _start_node_actors(
     params: dict[str, Any],
     node_ids: list[str],
 ) -> "NodeActorSet | None":
-    """Start one hardware actor per alive node; failures only skip a node."""
+    """Start one hardware actor per current-job node and reconcile later changes."""
     # Imported here so this module stays importable without Ray (e.g. from
     # the server command line).
     from .node_actor import NodeActorSet
 
-    handles = []
+    handles: dict[str, Any] = {}
     for node_id in node_ids:
         try:
-            handles.append(_create_node_actor(node_id, conf, labels, params))
+            handles[node_id] = _create_node_actor(node_id, conf, labels, params)
         except Exception:
             logger.warning(
                 "[rl-insight] failed to create the hardware actor on node "
@@ -254,8 +299,20 @@ def _start_node_actors(
             )
     if not handles:
         return None
-    logger.info("[rl-insight] hardware monitoring started on %d node(s).", len(handles))
-    return NodeActorSet(handles)
+    monitor = NodeActorSet(
+        handles,
+        create_actor=lambda node_id: _create_node_actor(node_id, conf, labels, params),
+        node_ids_provider=_job_node_ids,
+        reconcile_interval_seconds=max(
+            _MIN_RECONCILE_INTERVAL_SECONDS, float(params["interval_seconds"])
+        ),
+    )
+    logger.info(
+        "[rl-insight] hardware monitoring started on %d node(s); "
+        "new job nodes will be added automatically.",
+        len(handles),
+    )
+    return monitor
 
 
 def start_hardware_monitor(
@@ -265,21 +322,21 @@ def start_hardware_monitor(
 ) -> "HardwareMonitor | NodeActorSet | None":
     """Build and start hardware monitoring from the merged monitor config.
 
-    In a Ray job with alive nodes this creates one node-scoped hardware actor
-    per node (deduplicated by actor name), and the given ``client`` is used
-    only for the in-process fallback so tests and non-Ray clients keep the
-    simple thread model.
+    In a Ray job this creates one node-scoped hardware actor on the driver node
+    and on nodes hosting alive actors of the current job; the node set is
+    reconciled while the job runs. The given ``client`` is used only for the
+    non-Ray monitor so tests and non-Ray clients keep the simple thread model.
 
     Args:
         conf: Fully merged monitor config containing a ``hardware`` section.
-        client: Monitor client used by the in-process fallback; ``None``
+        client: Monitor client used by the non-Ray monitor; ``None``
             disables hardware monitoring entirely.
         labels: Init-level labels (project, experiment name) merged with the
             auto-detected ``node`` and ``run_id`` labels.
 
     Returns:
         The started monitor (``NodeActorSet`` under Ray, ``HardwareMonitor``
-        in-process), or ``None`` when disabled or there is nothing to report
+        otherwise), or ``None`` when disabled or there is nothing to report
         through.
 
     Note:
@@ -296,19 +353,26 @@ def start_hardware_monitor(
     base_labels = {str(k): str(v) for k, v in dict(labels or {}).items()}
 
     if _ray_is_initialized():
-        node_ids = _alive_node_ids()
+        node_ids = _job_node_ids()
+        if node_ids is None:
+            local_node = _local_node_id()
+            node_ids = [local_node] if local_node else []
+            logger.warning(
+                "[rl-insight] could not discover nodes used by the current Ray "
+                "job; monitoring the local node only."
+            )
         if node_ids:
             return _start_node_actors(conf, base_labels, params, node_ids)
 
-    # In-process fallback (tests, non-Ray clients): the caller's own process
-    # is the sampling node.
+    # Non-Ray mode (tests, non-Ray clients): the caller's own process is the
+    # sampling node.
     base_labels.update(identity_labels())
     monitor = HardwareMonitor(
         client=client,
         labels=base_labels,
         interval_seconds=params["interval_seconds"],
         collector_names=params["collector_names"],
-        collector_options=params["collector_options"],
+        collector_options=params.get("collector_options"),
     )
     monitor.start()
     return monitor

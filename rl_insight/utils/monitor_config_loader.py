@@ -61,8 +61,6 @@ _TRAINING_MONITOR_DEFAULTS = OmegaConf.create(
             "enabled": MonitorHardware.ENABLED,
             "interval_seconds": MonitorHardware.INTERVAL_SECONDS,
             "collectors": list(MonitorHardware.COLLECTORS),
-            "disk_path": MonitorHardware.DISK_PATH,
-            "worker_role": MonitorHardware.WORKER_ROLE,
         },
     }
 )

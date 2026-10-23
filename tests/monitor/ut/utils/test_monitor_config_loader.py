@@ -171,8 +171,8 @@ def test_load_monitor_config_should_default_hardware_section() -> None:
     assert conf.hardware.enabled == MonitorHardware.ENABLED
     assert conf.hardware.interval_seconds == MonitorHardware.INTERVAL_SECONDS
     assert list(conf.hardware.collectors) == list(MonitorHardware.COLLECTORS)
-    assert conf.hardware.disk_path == MonitorHardware.DISK_PATH
-    assert conf.hardware.worker_role == MonitorHardware.WORKER_ROLE
+    assert "disk_path" not in conf.hardware
+    assert "worker_role" not in conf.hardware
 
 
 def test_load_monitor_config_should_merge_hardware_overrides() -> None:
@@ -183,7 +183,6 @@ def test_load_monitor_config_should_merge_hardware_overrides() -> None:
                 "enabled": False,
                 "interval_seconds": 5,
                 "collectors": ["cpu"],
-                "disk_path": "/data",
             },
         }
     )
@@ -191,7 +190,6 @@ def test_load_monitor_config_should_merge_hardware_overrides() -> None:
     assert conf.hardware.enabled is False
     assert conf.hardware.interval_seconds == 5
     assert list(conf.hardware.collectors) == ["cpu"]
-    assert conf.hardware.disk_path == "/data"
 
 
 @pytest.mark.parametrize("value", ["0", "false", "False", "no", "off", " OFF "])

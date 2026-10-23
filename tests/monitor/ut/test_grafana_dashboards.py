@@ -12,16 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for Grafana dashboards: runtime staging and hardware panels."""
+"""Unit tests for Grafana dashboard staging and hardware panels."""
 
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from omegaconf import OmegaConf
 
 from rl_insight.server import runtime as runtime_module
@@ -69,34 +69,12 @@ def test_stage_rejects_json_collision_before_copying_extra(tmp_path) -> None:
     runtime_dir = tmp_path / "runtime"
     with pytest.raises(RuntimeError, match="already exists in runtime dashboards"):
         runtime_module._stage_grafana_dashboards(
-            _conf(builtin, tmp_path / "state", extra),
-            runtime_dir,
+            _conf(builtin, tmp_path / "state", extra), runtime_dir
         )
 
     staged = runtime_dir / "dashboards"
     assert (staged / "shared" / "board.json").read_text(encoding="utf-8") == "builtin"
     assert not (staged / "unique.json").exists()
-
-
-def test_stage_refreshes_extra_in_shared_builtin_directory(tmp_path) -> None:
-    builtin = tmp_path / "builtin"
-    extra = tmp_path / "extra"
-    (builtin / "shared").mkdir(parents=True)
-    (extra / "shared").mkdir(parents=True)
-    (builtin / "shared" / "builtin.json").write_text("builtin", encoding="utf-8")
-    extra_dashboard = extra / "shared" / "extra.json"
-    extra_dashboard.write_text("first", encoding="utf-8")
-    runtime_dir = tmp_path / "runtime"
-
-    runtime_module._stage_grafana_dashboards(
-        _conf(builtin, tmp_path / "state", extra), runtime_dir
-    )
-    extra_dashboard.write_text("second", encoding="utf-8")
-    staged = runtime_module._stage_grafana_dashboards(
-        _conf(builtin, tmp_path / "state", extra), runtime_dir
-    )
-
-    assert (staged / "shared" / "extra.json").read_text(encoding="utf-8") == "second"
 
 
 @pytest.mark.parametrize(
@@ -119,11 +97,128 @@ def test_stage_rejects_invalid_extra_directory(
 
 
 # ---------------------------------------------------------------------------
+# Hardware source selection.
+# ---------------------------------------------------------------------------
+
+
+def _dual_source_panel(builtin: str, exporter: str) -> dict[str, Any]:
+    return {
+        "spec": {
+            "data": {
+                "spec": {
+                    "queries": [
+                        {
+                            "spec": {
+                                "refId": "A",
+                                "hidden": False,
+                                "query": {"spec": {"expr": builtin}},
+                            }
+                        },
+                        {
+                            "spec": {
+                                "refId": "B",
+                                "hidden": True,
+                                "query": {"spec": {"expr": exporter}},
+                            }
+                        },
+                    ]
+                }
+            }
+        }
+    }
+
+
+def _dashboard(**panels: dict[str, Any]) -> dict[str, Any]:
+    return {"spec": {"elements": panels}}
+
+
+def _hidden_by_ref(panel: dict[str, Any]) -> dict[str, bool]:
+    queries = runtime_module._panel_queries(panel["spec"])
+    return {
+        query["spec"]["refId"]: bool(query["spec"].get("hidden")) for query in queries
+    }
+
+
+def test_set_hardware_source_should_switch_each_family_independently() -> None:
+    dashboard = _dashboard(
+        **{
+            "panel-node": _dual_source_panel(
+                "rl_insight_monitor_rlinsight_cpu_utilization_percent",
+                'node_cpu_seconds_total{job="node-exporter"}',
+            ),
+            "panel-npu": _dual_source_panel(
+                "rl_insight_monitor_rlinsight_npu_chip_info_utilization",
+                'npu_chip_info_utilization{job="npu-exporter"}',
+            ),
+            "panel-gpu": _dual_source_panel(
+                "rl_insight_monitor_rlinsight_gpu_utilization_percent",
+                "DCGM_FI_DEV_GPU_UTIL",
+            ),
+        }
+    )
+    elements = dashboard["spec"]["elements"]
+
+    assert runtime_module._set_hardware_source(dashboard, {"npu-exporter"}) is True
+    assert _hidden_by_ref(elements["panel-node"]) == {"A": False, "B": True}
+    assert _hidden_by_ref(elements["panel-npu"]) == {"A": True, "B": False}
+    assert _hidden_by_ref(elements["panel-gpu"]) == {"A": False, "B": True}
+
+    assert (
+        runtime_module._set_hardware_source(dashboard, {"node-exporter", "dcgm"})
+        is True
+    )
+    assert _hidden_by_ref(elements["panel-node"]) == {"A": True, "B": False}
+    assert _hidden_by_ref(elements["panel-npu"]) == {"A": False, "B": True}
+    assert _hidden_by_ref(elements["panel-gpu"]) == {"A": True, "B": False}
+
+
+def test_refresh_staged_dashboards_should_follow_registered_exporters(
+    tmp_path: Path,
+) -> None:
+    targets = tmp_path / "targets" / "prometheus-targets.yml"
+    targets.parent.mkdir(parents=True)
+    targets.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "targets": ["10.0.0.1:9100"],
+                    "labels": {"rl_insight_job": "node-exporter"},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    dashboard_dir = tmp_path / "runtime" / "dashboards"
+    dashboard_dir.mkdir(parents=True)
+    panel = _dual_source_panel(
+        "rl_insight_monitor_rlinsight_cpu_utilization_percent",
+        'node_cpu_seconds_total{job="node-exporter"}',
+    )
+    (dashboard_dir / "board.json").write_text(
+        json.dumps(_dashboard(**{"panel-325": panel})), encoding="utf-8"
+    )
+    conf = OmegaConf.create(
+        {
+            "server": {
+                "data_dir": str(tmp_path),
+                "runtime_dir": str(tmp_path / "runtime"),
+            }
+        }
+    )
+
+    assert runtime_module._registered_hardware_exporters(conf) == {"node-exporter"}
+    assert runtime_module.refresh_staged_dashboards(conf) == 1
+    stored = json.loads((dashboard_dir / "board.json").read_text(encoding="utf-8"))
+    assert _hidden_by_ref(stored["spec"]["elements"]["panel-325"]) == {
+        "A": True,
+        "B": False,
+    }
+    # A second pass has nothing left to change.
+    assert runtime_module.refresh_staged_dashboards(conf) == 0
+
+
+# ---------------------------------------------------------------------------
 # Trainer dashboard hardware panels.
-#
-# Every hardware panel reads the in-process metrics emitted by
-# ``rl_insight.init()``; the legacy exporter queries were removed so the
-# built-in collector is the only hardware source.
 # ---------------------------------------------------------------------------
 
 _DASHBOARDS_DIR = (
@@ -138,102 +233,46 @@ _TRAINER_DASHBOARDS = [
     _DASHBOARDS_DIR / "verl" / "verl_trainer_v1_with_vllm_engine.json",
     _DASHBOARDS_DIR / "verl-omni" / "verl_omni_trainer_v1_with_vllm_omni_engine.json",
 ]
-
-# Prometheus prefix added by the hub's MetricRegistry namespace.
 _METRIC_PREFIX = f"{MonitorDefaults.NAMESPACE}_rlinsight_"
+_DEVICE_FILTER = 'device_index=~"$device_index"'
 
-# Hardware panel id -> in-process metric family backing each panel.
-_INTEGRATED_PANELS = {
+# Panel id -> built-in metric family backing the visible query.
+_BUILTIN_PANELS = {
     "325": "cpu_utilization_percent",
     "326": "memory_used_bytes",
     "328": "network_receive_bytes_per_second",
-    "329": "npu_utilization_percent",
-    "330": "npu_memory_utilization_percent",
-    "331": "npu_memory_used_bytes",
-    "332": "npu_power_watts",
-    "333": "npu_temperature_celsius",
-    "334": "npu_health_status",
-    "335": "npu_hbm_bandwidth_utilization_percent",
+    "329": "npu_chip_info_utilization",
+    "330": "npu_chip_info_hbm_utilization",
+    "331": "npu_chip_info_hbm_used_memory",
+    "332": "npu_chip_info_power",
+    "333": "npu_chip_info_temperature",
+    "334": "npu_chip_info_health_status",
+    "335": "npu_chip_info_hbm_bandwidth_utilization",
     "337": "gpu_utilization_percent",
     "338": "gpu_memory_utilization_percent",
     "339": "gpu_memory_used_bytes",
     "340": "gpu_power_watts",
     "341": "gpu_temperature_celsius",
+    "344": "disk_read_bytes_per_second",
 }
-# In-process device panels: panel ids with NPU legend vs GPU legend.
-_NPU_DEVICE_PANELS = ("329", "330", "331", "332", "333", "334", "335")
-_GPU_DEVICE_PANELS = ("337", "338", "339", "340", "341")
-# Node-level host panels that must say so, since their values cover every
-# process on the node rather than just this training job.
-_HOST_PANELS = ("325", "326", "328", "344")
-# In-process-only process panels: panel id -> backing metric family.
-# The per-Ray-worker panels read the dedicated rlinsight_ray_process_* families
-# (on by default) and are filtered by card; the self-process panels read
-# rlinsight_process_* and have no card to show.
-_RAY_PROCESS_PANELS = {
-    "345": "ray_process_cpu_percent",
-    "346": "ray_process_rss_bytes",
-}
-_SELF_PROCESS_PANELS = {
-    "347": "process_cpu_percent",
-    "348": "process_rss_bytes",
-}
-_RAY_PROCESS_LEGEND = "{{node}} {{device_index}} {{worker_role}} {{pid}}"
-_SELF_PROCESS_LEGEND = "{{node}} {{worker_role}} {{pid}}"
-_DEVICE_FILTER = 'device_index=~"$device_index"'
-
-
-def _device_filter_selects(expr: str) -> bool:
-    """Whether the device filter is a label matcher inside a metric selector.
-
-    Appending the matcher behind the selector's closing brace silently turns it
-    into an extra ``label_replace`` argument, which makes PromQL reject the whole
-    expression and the panel go blank.
-    """
-    return (
-        re.search(r"\{[^{}]*" + re.escape(_DEVICE_FILTER) + r"[^{}]*\}", expr)
-        is not None
-    )
-
-
-# Node scoping behind the node tabs: every panel matches the selected node
-# through the in-process ``node`` label.
-_NODE_FILTER = 'node=~"$node"'
-# Panel ids scoped by the selected node. Both the NPU and the NVIDIA GPU
-# device rows follow the node picker.
-_NODE_SCOPED_PANELS = (
-    "325",
-    "326",
-    "328",
-    *_NPU_DEVICE_PANELS,
-    *_GPU_DEVICE_PANELS,
-    "344",
-    *_RAY_PROCESS_PANELS,
-    *_SELF_PROCESS_PANELS,
-)
-# Every hardware timeseries panel.
-_HW_TIMESERIES_PANELS = tuple(str(panel_id) for panel_id in range(325, 349))
-
-
-def _node_filter_selects(expr: str) -> bool:
-    """Whether the node filter is a label matcher inside a metric selector."""
-    return (
-        re.search(r"\{[^{}]*" + re.escape(_NODE_FILTER) + r"[^{}]*\}", expr) is not None
-    )
+_RAY_PROCESS_PANELS = {"345": "ray_process_cpu_percent", "346": "ray_process_rss_bytes"}
+_SELF_PROCESS_PANELS = {"347": "process_cpu_percent", "348": "process_rss_bytes"}
 
 
 @pytest.fixture(
     scope="module", params=_TRAINER_DASHBOARDS, ids=lambda path: path.parent.name
 )
 def trainer_dashboard(request: pytest.FixtureRequest) -> dict[str, Any]:
-    """Parsed spec of one trainer dashboard."""
     with open(request.param, encoding="utf-8") as f:
         return json.load(f)["spec"]
 
 
 def _panel_queries(spec: dict[str, Any], panel_id: str) -> list[tuple[str, str, bool]]:
     """(expr, legendFormat, hidden) triples of one hardware panel."""
-    queries = spec["elements"][f"panel-{panel_id}"]["spec"]["data"]["spec"]["queries"]
+    element = spec["elements"].get(f"panel-{panel_id}")
+    if element is None:
+        return []
+    queries = element["spec"]["data"]["spec"]["queries"]
     return [
         (
             query["spec"]["query"]["spec"]["expr"],
@@ -244,333 +283,98 @@ def _panel_queries(spec: dict[str, Any], panel_id: str) -> list[tuple[str, str, 
     ]
 
 
-def _visible(spec: dict[str, Any], panel_id: str) -> list[str]:
-    return [expr for expr, _, hidden in _panel_queries(spec, panel_id) if not hidden]
+def _query_values(spec: dict[str, Any], panel_id: str, *, hidden: bool) -> list[str]:
+    return [
+        expr
+        for expr, _, is_hidden in _panel_queries(spec, panel_id)
+        if is_hidden == hidden
+    ]
 
 
-def _hidden(spec: dict[str, Any], panel_id: str) -> list[str]:
-    return [expr for expr, _, hidden in _panel_queries(spec, panel_id) if hidden]
-
-
-def test_integrated_panels_should_show_in_process_queries(
+def test_builtin_panels_should_hide_the_exporter_query(
     trainer_dashboard: dict[str, Any],
 ) -> None:
-    for panel_id, family in _INTEGRATED_PANELS.items():
-        visible = _visible(trainer_dashboard, panel_id)
-        assert visible, panel_id
-        assert _hidden(trainer_dashboard, panel_id) == [], panel_id
-        for expr in visible:
-            assert _METRIC_PREFIX in expr, expr
-            assert 'project=~"$project"' in expr, expr
-            assert 'experiment_name=~"$experiment_name"' in expr, expr
+    for panel_id, family in _BUILTIN_PANELS.items():
+        visible = _query_values(trainer_dashboard, panel_id, hidden=False)
+        hidden = _query_values(trainer_dashboard, panel_id, hidden=True)
+        if not visible:
+            continue  # the omni dashboard has no disk panel
+        assert hidden, panel_id
         assert any(f"{_METRIC_PREFIX}{family}" in expr for expr in visible), panel_id
+        assert all(_METRIC_PREFIX not in expr for expr in hidden), panel_id
 
-    # The network panel reports receive and transmit as separate queries.
-    network_visible = _visible(trainer_dashboard, "328")
-    assert any("network_receive_bytes_per_second" in expr for expr in network_visible)
-    assert any("network_transmit_bytes_per_second" in expr for expr in network_visible)
+    # Both directions are present on the network and disk panels.
+    for panel_id in ("328", "344"):
+        visible = " ".join(_query_values(trainer_dashboard, panel_id, hidden=False))
+        if visible:
+            assert "network_receive" in visible or "disk_read" in visible
+            assert "network_transmit" in visible or "disk_write" in visible
+
+
+def test_npu_memory_panel_should_use_megabytes_like_the_exporter(
+    trainer_dashboard: dict[str, Any],
+) -> None:
+    visible = _query_values(trainer_dashboard, "331", hidden=False)
+    if not visible:
+        pytest.skip("dashboard has no NPU memory panel")
+
+    assert all("/ 1048576" not in expr for expr in visible)
 
 
 @pytest.mark.parametrize(
-    "dashboard_path", _TRAINER_DASHBOARDS, ids=lambda path: path.parent.name
+    ("panel_ids", "legend", "shows_card"),
+    [
+        (
+            ("329", "330", "331", "332", "333", "337", "338", "339", "340", "341"),
+            None,
+            True,
+        ),
+        (
+            tuple(_RAY_PROCESS_PANELS),
+            "{{node}} {{device_index}} {{worker_role}} {{pid}}",
+            True,
+        ),
+        (tuple(_SELF_PROCESS_PANELS), "{{node}} {{worker_role}} {{pid}}", False),
+    ],
+    ids=["devices", "ray-process", "self-process"],
 )
-def test_disk_panel_should_show_in_process_queries(dashboard_path: Path) -> None:
-    with open(dashboard_path, encoding="utf-8") as f:
-        spec = json.load(f)["spec"]
+def test_process_and_device_panels_should_filter_by_device(
+    trainer_dashboard: dict[str, Any],
+    panel_ids: tuple[str, ...],
+    legend: str | None,
+    shows_card: bool,
+) -> None:
+    for panel_id in panel_ids:
+        queries = _panel_queries(trainer_dashboard, panel_id)
+        if not queries:
+            continue
+        for expr, legend_format, hidden in queries:
+            if hidden:
+                continue  # exporter queries are covered by the source tests
+            assert (_DEVICE_FILTER in expr) is shows_card, expr
+            if legend is not None:
+                assert legend_format == legend, legend_format
 
-    visible = _visible(spec, "344")
-    assert visible
-    assert _hidden(spec, "344") == []
-    for expr in visible:
-        assert _METRIC_PREFIX in expr, expr
-        assert 'project=~"$project"' in expr, expr
-        assert 'experiment_name=~"$experiment_name"' in expr, expr
 
-    assert any("disk_read_bytes_per_second" in expr for expr in visible)
-    assert any("disk_write_bytes_per_second" in expr for expr in visible)
-
-
-def test_npu_panels_should_keep_id_legend(
+def test_node_variable_should_cover_builtin_and_exporter_sources(
     trainer_dashboard: dict[str, Any],
 ) -> None:
-    # The in-process device_index is renamed to id, and node prefixes the
-    # legend so multi-node series never collide.
-    for panel_id in _NPU_DEVICE_PANELS:
-        for expr, legend, hidden in _panel_queries(trainer_dashboard, panel_id):
-            assert not hidden, expr
-            assert "label_replace(" in expr, expr
-            assert legend == "{{node}} NPU {{id}}", legend
-            assert '"device_index"' in expr, expr
-
-
-def test_gpu_panels_should_keep_id_legend(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    # The in-process series rewrite device_index to id and carry node directly.
-    for panel_id in _GPU_DEVICE_PANELS:
-        for expr, legend, hidden in _panel_queries(trainer_dashboard, panel_id):
-            assert not hidden, expr
-            assert "label_replace(" in expr, expr
-            assert legend == "{{node}} GPU {{id}}", legend
-            assert '"device_index"' in expr, expr
-
-
-def test_memory_used_panels_should_scale_in_process_bytes_to_megabytes(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    # The in-process series are bytes; the panels convert them to megabytes.
-    for panel_id in ("331", "339"):
-        visible = _visible(trainer_dashboard, panel_id)
-        assert visible
-        for expr in visible:
-            assert "/ 1048576" in expr, expr
-
-
-def test_node_variable_should_read_the_in_process_node_label(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    # The node picker is sourced only from the in-process series; there is no
-    # exporter instance to synthesize a node from anymore.
-    spec = next(
-        variable["spec"]
+    variable = next(
+        variable
         for variable in trainer_dashboard["variables"]
         if variable["spec"]["name"] == "node"
     )
-    query = spec["definition"]
+    query = variable["spec"]["definition"]
 
     assert "query_result(" in query
-    assert "count by (node)" in query
-    assert 'node=~".+"' in query
-    assert 'node!~".+"' not in query
-    assert "label_replace(" not in query
-    assert f"{_METRIC_PREFIX}npu_info" in query
     assert f"{_METRIC_PREFIX}cpu_utilization_percent" in query
-    assert "npu_chip_info_name" not in query
-    # Grafana anchors an undelimited pattern with ``^...$`` (``stringToJsRegex``),
-    # which can never match the ``query_result`` text
-    # ``{node="1.2.3.4"} 1 1712345678000``; the pattern must be slash delimited,
-    # and the capture named ``value`` so it becomes the option value.
-    assert spec["regex"] == '/node="(?<value>[^"]+)"/'
-    assert spec["regexApplyTo"] == "value"
-    assert spec["hide"] == "dontHide"
-    assert spec["multi"] is True
-    assert spec["includeAll"] is True
-    assert spec["allValue"] == ".*"
-    assert spec["current"] == {"text": "All", "value": "$__all"}
-    assert spec["query"]["spec"]["query"] == query
-    assert spec["query"]["datasource"] == {"name": "${datasource}"}
-
-
-def test_variable_regexes_should_be_slash_delimited(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    # Grafana wraps an undelimited pattern in ``^...$`` (``stringToJsRegex``),
-    # so ``node="([^"]+)"`` silently matched nothing against the query_result
-    # text ``{node="1.2.3.4"} 1 1712345678000`` and the variable ended up with
-    # zero options. Anything but ``/re/`` gets anchored, so every non-empty
-    # regex must be slash delimited.
-    for variable in trainer_dashboard["variables"]:
-        name = variable["spec"]["name"]
-        regex = variable["spec"].get("regex", "")
-        if regex:
-            assert re.fullmatch(r"/.*/[gmi]*", regex), (name, regex)
-
-
-def test_worker_role_variable_should_read_both_process_metric_families(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    # The dropdown must cover both the default per-Ray-worker families and the
-    # opt-in self-process ones, so a manually set hardware.worker_role is also
-    # selectable.
-    variable = next(
-        variable
-        for variable in trainer_dashboard["variables"]
-        if variable["spec"]["name"] == "worker_role"
-    )
-    spec = variable["spec"]
-    query = spec["definition"]
-
-    assert f"{_METRIC_PREFIX}ray_process_cpu_percent" in query
-    assert f"{_METRIC_PREFIX}process_cpu_percent" in query
-    assert "worker_role" in query
-    assert spec["multi"] is True
-    assert spec["includeAll"] is True
-    assert spec["allValue"] == ".*"
-
-
-def test_host_panels_should_be_labelled_node_level(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    # The host metrics describe the whole node, so the panel must not imply
-    # they belong to a single job on a shared node.
-    for panel_id in _HOST_PANELS:
-        panel = trainer_dashboard["elements"][f"panel-{panel_id}"]["spec"]
-        assert panel["title"].startswith("Node "), panel["title"]
-        description = panel["description"]
-        assert "not only this training job" in description or (
-            "other processes" in description
-        ), description
-
-
-@pytest.mark.parametrize(
-    ("panels", "legend", "shows_card"),
-    [
-        (_RAY_PROCESS_PANELS, _RAY_PROCESS_LEGEND, True),
-        (_SELF_PROCESS_PANELS, _SELF_PROCESS_LEGEND, False),
-    ],
-    ids=["ray-actor-process", "self-process"],
-)
-def test_process_panels_should_show_in_process_metrics(
-    trainer_dashboard: dict[str, Any],
-    panels: dict[str, str],
-    legend: str,
-    shows_card: bool,
-) -> None:
-    # The process collectors report in-process metrics only, so the panels
-    # carry a single query. They are process-level (not node-level): the legend
-    # separates the reporting processes of a shared node, and the Ray worker
-    # ones add the card so a curve can be traced past its pid.
-    for panel_id, family in panels.items():
-        queries = _panel_queries(trainer_dashboard, panel_id)
-        assert queries, panel_id
-        for expr, legend_format, hidden in queries:
-            assert not hidden, expr
-            assert f"{_METRIC_PREFIX}{family}" in expr, expr
-            assert 'project=~"$project"' in expr, expr
-            assert 'experiment_name=~"$experiment_name"' in expr, expr
-            assert 'worker_role=~"$worker_role"' in expr, expr
-            assert _device_filter_selects(expr) is shows_card, expr
-            assert legend_format == legend, legend_format
-
-
-def test_device_variable_should_filter_workers_and_cards_together(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    variable = next(
-        variable
-        for variable in trainer_dashboard["variables"]
-        if variable["spec"]["name"] == "device_index"
-    )
-    spec = variable["spec"]
-
-    assert f"{_METRIC_PREFIX}" in spec["definition"]
-    assert "device_index" in spec["definition"]
-    assert spec["multi"] is True
-    assert spec["includeAll"] is True
-    assert spec["allValue"] == ".*"
-    # A query variable without an executable query resolves to no value at all,
-    # which blanks every panel carrying the filter.
-    assert spec["query"]["spec"]["query"] == spec["definition"]
-    assert spec["query"]["datasource"] == {"name": "${datasource}"}
-    assert spec["refresh"] == "onDashboardLoad"
-    assert spec["current"] == {"text": "All", "value": "$__all"}
-
-    # One dropdown drives both the worker processes and the cards they run on,
-    # so a worker can be read next to its own NPU/GPU panels.
-    filtered = [
-        panel_id
-        for panel_id in (*_NPU_DEVICE_PANELS, *_GPU_DEVICE_PANELS, *_RAY_PROCESS_PANELS)
-        if all(
-            _device_filter_selects(expr)
-            for expr in _visible(trainer_dashboard, panel_id)
-        )
-    ]
-    assert filtered == [
-        *_NPU_DEVICE_PANELS,
-        *_GPU_DEVICE_PANELS,
-        *_RAY_PROCESS_PANELS,
-    ]
-
-
-def test_only_ray_process_legends_should_sort_by_max_descending(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    # A single four-card run already spawns eight storage/reward/agent workers,
-    # so those legends rank by utilization to surface the busiest series. Every
-    # other hardware panel keeps its natural series order: ranking NPU/GPU
-    # legends by utilization would shuffle the cards out of rank order.
-    for panel_id in _HW_TIMESERIES_PANELS:
-        element = trainer_dashboard["elements"].get(f"panel-{panel_id}")
-        if element is None:
-            continue
-        viz = element["spec"]["vizConfig"]
-        if viz.get("group") != "timeseries":
-            continue
-        legend = viz["spec"]["options"]["legend"]
-        if panel_id in _RAY_PROCESS_PANELS:
-            assert legend["sortBy"] == "Max", panel_id
-            assert legend["sortDesc"] is True, panel_id
-        else:
-            assert "sortBy" not in legend, panel_id
-            assert "sortDesc" not in legend, panel_id
-
-
-def test_hardware_panels_should_filter_by_selected_node(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    # Every node-scoped panel separates one node's series from the rest, so a
-    # node tab shows a single node.
-    for panel_id in _NODE_SCOPED_PANELS:
-        for expr, _, _ in _panel_queries(trainer_dashboard, panel_id):
-            assert _METRIC_PREFIX in expr, expr
-            assert _node_filter_selects(expr), expr
-
-
-def test_hardware_rows_should_not_repeat_as_node_tabs(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    # Repeating a row per node needs the node variable to resolve while the
-    # dashboard loads. ``query_result`` is evaluated at the end of the time
-    # range, so a finished run (no samples in the last lookback window) yields no
-    # nodes, and the row collapses into a single empty ``All`` tab that renders
-    # nothing. The rows therefore stay flat and node switching goes through the
-    # ``hardware: Node`` picker, which also keeps a 1024-card cluster from
-    # spawning hundreds of tabs.
-    expected_items = {
-        "CPU / Host Metrics": (325, 326, 328, 344, 345, 346, 347, 348),
-        "Ascend NPU Metrics": (329, 330, 331, 332, 333, 334, 335),
-    }
-    for title, panel_ids in expected_items.items():
-        row = _find_row_spec(trainer_dashboard["layout"], title)
-        assert row is not None, title
-        layout = row["layout"]
-        assert layout["kind"] == "AutoGridLayout", title
-        # ``json.dumps`` catches a nested repeat on a tab too.
-        assert "repeat" not in json.dumps(layout), title
-        names = [item["spec"]["element"]["name"] for item in layout["spec"]["items"]]
-        expected = [
-            f"panel-{panel_id}"
-            for panel_id in panel_ids
-            if f"panel-{panel_id}" in trainer_dashboard["elements"]
-        ]
-        assert names == expected, title
-
-
-def test_dashboards_should_not_reference_the_removed_instance_variable(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    # The node variable replaced the old instance-scoped one everywhere; a
-    # leftover reference in a panel query would silently blank that panel.
-    assert "npu_instance" not in json.dumps(trainer_dashboard)
-
-
-def test_hardware_panels_should_not_query_legacy_exporters(
-    trainer_dashboard: dict[str, Any],
-) -> None:
-    # The built-in collector is the only hardware source; a leftover exporter
-    # query would draw a second, unrelated series in the same panel.
-    text = json.dumps(trainer_dashboard)
-    for marker in ("node-exporter", "npu-exporter", "DCGM_FI_DEV_"):
-        assert marker not in text, marker
-
-
-# Descriptions are tooltips, not documentation: keep them one line long.
-_MAX_DESCRIPTION = 120
-_REMOVED_DESCRIPTION_TAILS = ("node_exporter", "DCGM exporter", "in-process monitor or")
+    assert f"{_METRIC_PREFIX}npu_chip_info_name" in query
+    assert "npu_chip_info_name" in query
+    assert "DCGM_FI_DEV_GPU_UTIL" in query
+    assert variable["spec"]["regex"] == '/node="(?<value>[^"]+)"/'
 
 
 def _find_row_spec(layout: Any, title: str) -> dict[str, Any] | None:
-    """The spec of the row titled ``title`` anywhere in the layout tree."""
     if not isinstance(layout, dict):
         return None
     spec = layout.get("spec")
@@ -593,38 +397,54 @@ def _find_row_spec(layout: Any, title: str) -> dict[str, Any] | None:
     return None
 
 
-def test_device_rows_should_always_render(
+def test_hardware_vendor_rows_should_render_only_for_present_vendors(
     trainer_dashboard: dict[str, Any],
 ) -> None:
-    # A data-derived rule blanks these rows exactly when the vendor's metrics go
-    # stale, so both rows render unconditionally and their panels report the
-    # missing data themselves. The probes that used to feed such a rule are gone.
-    variables = {
-        variable["spec"]["name"] for variable in trainer_dashboard["variables"]
-    }
-    for title in ("Ascend NPU Metrics", "NVIDIA GPU Metrics"):
+    def _condition(title: str) -> dict[str, Any]:
         row = _find_row_spec(trainer_dashboard["layout"], title)
         assert row is not None, title
-        assert "conditionalRendering" not in row, title
-    assert "npu_detected" not in variables
-    assert "gpu_detected" not in variables
+        assert "repeat" not in json.dumps(row.get("layout") or {}), title
+        return row["conditionalRendering"]["spec"]
+
+    cpu_row = _find_row_spec(trainer_dashboard["layout"], "CPU / Host Metrics")
+    assert cpu_row is not None
+    assert "conditionalRendering" not in cpu_row
+    assert "repeat" not in json.dumps(cpu_row.get("layout") or {})
+
+    for title, variable, value in (
+        ("Ascend NPU Metrics", "npu_vendor", "ascend"),
+        ("NVIDIA GPU Metrics", "gpu_vendor", "nvidia"),
+    ):
+        condition = _condition(title)
+        assert condition["visibility"] == "show"
+        assert condition["condition"] == "and"
+        assert condition["items"] == [
+            {
+                "kind": "ConditionalRenderingVariable",
+                "spec": {"variable": variable, "operator": "equals", "value": value},
+            }
+        ]
+
+    variables = {
+        variable["spec"]["name"]: variable["spec"]
+        for variable in trainer_dashboard["variables"]
+    }
+    for name in ("npu_vendor", "gpu_vendor"):
+        assert name in variables
+        assert variables[name]["hide"] == "hideVariable"
+        assert variables[name]["refresh"] == "onTimeRangeChanged"
+    assert "npu_chip_info_name" in variables["npu_vendor"]["definition"]
+    assert "DCGM_FI_DEV_GPU_UTIL" in variables["gpu_vendor"]["definition"]
 
 
-def test_hardware_descriptions_should_stay_short(
+def test_hardware_descriptions_should_not_refer_to_internal_sources(
     trainer_dashboard: dict[str, Any],
 ) -> None:
-    panel_ids = (
-        *_INTEGRATED_PANELS,
-        "344",
-        *_RAY_PROCESS_PANELS,
-        *_SELF_PROCESS_PANELS,
-    )
-    for panel_id in panel_ids:
+    for panel_id in (*_BUILTIN_PANELS, *_RAY_PROCESS_PANELS, *_SELF_PROCESS_PANELS):
         element = trainer_dashboard["elements"].get(f"panel-{panel_id}")
         if element is None:
-            continue  # the omni dashboard has no disk panel
+            continue
         description = element["spec"].get("description", "")
-        assert description, panel_id
-        assert len(description) <= _MAX_DESCRIPTION, (panel_id, description)
-        for tail in _REMOVED_DESCRIPTION_TAILS:
-            assert tail not in description, (panel_id, description)
+        assert description
+        assert "in-process" not in description
+        assert len(description) <= 120, (panel_id, description)

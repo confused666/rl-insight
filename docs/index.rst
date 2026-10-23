@@ -31,6 +31,10 @@ For offline Recipe utilities, see the
 
    monitor/hardware/hardware_monitoring_zh
    monitor/hardware/hardware_monitoring_en
+   monitor/hardware/cpu_monitoring_zh
+   monitor/hardware/cpu_monitoring_en
+   monitor/hardware/npu_monitoring_zh
+   monitor/hardware/npu_monitoring_en
 
 Contribution
 -------------
